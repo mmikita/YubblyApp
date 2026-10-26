@@ -129,10 +129,17 @@ public class PlaybackService extends MediaSessionService {
         primary.seekTo(savedPosition);secondary.seekTo(MixerMath.secondaryPosition(savedPosition,offset()));
         primary.prepare();secondary.prepare();wanted=true;reconcile();persist();
     }
+    /**
+     * googlevideo links, or the app's own loopback proxy. The proxy is the only
+     * way to give ExoPlayer stable URLs: a googlevideo URL stops working after
+     * roughly a megabyte.
+     */
     private String requiredUrl(Map<String,Object> args,String key){
         String url=str(args,key,"");android.net.Uri u=android.net.Uri.parse(url);
-        String host=u.getHost();
-        if(!"https".equals(u.getScheme()) || host==null || !(host.endsWith(".googlevideo.com") || host.equals("googlevideo.com")))
+        String host=u.getHost();String scheme=u.getScheme();
+        boolean youtube="https".equals(scheme) && host!=null && (host.equals("googlevideo.com")||host.endsWith(".googlevideo.com"));
+        boolean loopback="http".equals(scheme) && ("127.0.0.1".equals(host)||"localhost".equals(host));
+        if(!youtube && !loopback)
             throw new IllegalArgumentException("Nieprawidłowy adres strumienia YouTube.");
         return url;
     }

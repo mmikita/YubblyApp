@@ -76,5 +76,12 @@
 	     Fall back to the Skia (Metal) backend for every build configuration. -->
 	<key>FLTEnableImpeller</key>
 	<false/>
+	<!-- Audio is streamed through a loopback proxy (http://127.0.0.1), the only
+	     way to hand AVPlayer stable URLs for YouTube's one-shot media links. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

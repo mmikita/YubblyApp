@@ -1,5 +1,10 @@
+import 'dart:io';
+
+import 'package:path_provider/path_provider.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+
 import 'models.dart';
+import 'stream_proxy.dart';
 
 class VideoDetails {
   final VideoItem video;
@@ -8,7 +13,24 @@ class VideoDetails {
 }
 
 class YoutubeRepository {
+  YoutubeRepository({this.cacheDirectory});
+
   final YoutubeExplode _yt = YoutubeExplode();
+
+  /// Where [StreamProxy] stores its segment cache. Defaults to a subdirectory
+  /// of the platform temp directory; injectable for tests and tooling.
+  final Directory? cacheDirectory;
+
+  /// Loopback server that turns YouTube's one-shot media URLs into something
+  /// AVFoundation and ExoPlayer can stream. Started lazily, `null` where the
+  /// platform has no writable temp directory.
+  StreamProxy? _proxy;
+
+  /// Set when the proxy cannot be created, so raw URLs are used instead.
+  bool _proxyUnavailable = false;
+
+  /// Number of manifests minted for media URLs; diagnostics only.
+  int mintedManifests = 0;
 
   VideoItem _item(Video v) => VideoItem(
     id: v.id.value,
@@ -82,9 +104,9 @@ class YoutubeRepository {
   }) async {
     if (a == b) throw StateError('Wybierz dwa różne języki.');
     // Fresh, independent manifests: Android client URLs can be single-session-bound.
-    final ma = await _manifest(id);
-    final mb = await _manifest(id);
-    String? videoUrl;
+    final streamA = _select(await _manifest(id), a, mp4Only: mp4Only);
+    final streamB = _select(await _manifest(id), b, mp4Only: mp4Only);
+    VideoOnlyStreamInfo? videoStream;
     if (video) {
       final mv = await _manifest(id);
       final candidates =
@@ -100,18 +122,119 @@ class YoutubeRepository {
               (a, b) =>
                   b.videoResolution.height.compareTo(a.videoResolution.height),
             );
-      videoUrl = candidates.firstOrNull?.url.toString();
-      if (videoUrl == null) {
+      videoStream = candidates.firstOrNull;
+      if (videoStream == null) {
         throw StateError(
           'Brak zgodnego strumienia obrazu. Wyłącz obraz i uruchom samo audio.',
         );
       }
     }
-    return {
-      'urlA': _select(ma, a, mp4Only: mp4Only).url.toString(),
-      'urlB': _select(mb, b, mp4Only: mp4Only).url.toString(),
-      'videoUrl': videoUrl,
-    };
+    final proxy = await _ensureProxy();
+    if (proxy == null) {
+      return {
+        'urlA': streamA.url.toString(),
+        'urlB': streamB.url.toString(),
+        'videoUrl': videoStream?.url.toString(),
+      };
+    }
+    await proxy.release();
+    final urlA = await proxy.register(
+      ProxyTrack(
+        length: streamA.size.totalBytes,
+        mimeType: _mimeType(streamA.container, video: false),
+        mint: () => _freshUrl(id, a, streamA.tag, mp4Only: mp4Only),
+      ),
+    );
+    final urlB = await proxy.register(
+      ProxyTrack(
+        length: streamB.size.totalBytes,
+        mimeType: _mimeType(streamB.container, video: false),
+        mint: () => _freshUrl(id, b, streamB.tag, mp4Only: mp4Only),
+      ),
+    );
+    String? videoUrl;
+    final chosenVideo = videoStream;
+    if (chosenVideo != null) {
+      videoUrl = await proxy.register(
+        ProxyTrack(
+          length: chosenVideo.size.totalBytes,
+          mimeType: _mimeType(chosenVideo.container, video: true),
+          mint: () => _freshVideoUrl(id, chosenVideo.tag),
+        ),
+      );
+    }
+    return {'urlA': urlA, 'urlB': urlB, 'videoUrl': videoUrl};
+  }
+
+  static String _mimeType(StreamContainer container, {required bool video}) =>
+      switch (container.name) {
+        'mp4' => video ? 'video/mp4' : 'audio/mp4',
+        'webm' => video ? 'video/webm' : 'audio/webm',
+        '3gpp' => video ? 'video/3gpp' : 'audio/3gpp',
+        _ => 'application/octet-stream',
+      };
+
+  /// Creates the loopback proxy on first use.
+  Future<StreamProxy?> _ensureProxy() async {
+    if (_proxy != null || _proxyUnavailable) return _proxy;
+    try {
+      final dir =
+          cacheDirectory ??
+          Directory('${(await getTemporaryDirectory()).path}/yubbly_streams');
+      final proxy = StreamProxy(cacheDir: dir);
+      await proxy.start();
+      return _proxy = proxy;
+    } catch (_) {
+      // No temp directory (e.g. a plain Dart VM): fall back to raw URLs.
+      _proxyUnavailable = true;
+      return null;
+    }
+  }
+
+  /// Drops cached media segments of the previous session.
+  Future<void> releaseStreams() async => _proxy?.release();
+
+  /// A manifest used only for minting media URLs.
+  ///
+  /// Skips the watch page when possible: the proxy needs a new URL roughly
+  /// every megabyte, so this is the hot path and must stay cheap.
+  Future<StreamManifest> _mintManifest(String id) async {
+    mintedManifests++;
+    try {
+      return await _yt.videos.streams
+          .getManifest(id, requireWatchPage: false)
+          .timeout(const Duration(seconds: 30));
+    } catch (_) {
+      return _manifest(id);
+    }
+  }
+
+  /// Mints a fresh URL for one language track.
+  Future<Uri?> _freshUrl(
+    String id,
+    String language,
+    int tag, {
+    required bool mp4Only,
+  }) async {
+    final manifest = await _mintManifest(id);
+    final same = _audio(manifest).where((s) => _key(s) == language);
+    for (final stream in same) {
+      if (stream.tag == tag) return stream.url;
+    }
+    try {
+      return _select(manifest, language, mp4Only: mp4Only).url;
+    } on StateError {
+      return null;
+    }
+  }
+
+  /// Mints a fresh URL for the video stream chosen when the session started.
+  Future<Uri?> _freshVideoUrl(String id, int tag) async {
+    final manifest = await _mintManifest(id);
+    for (final stream in manifest.videoOnly) {
+      if (stream.tag == tag && stream.fragments.isEmpty) return stream.url;
+    }
+    return null;
   }
 
   Future<ChannelItem> channel(String input) async {
@@ -156,5 +279,9 @@ class YoutubeRepository {
   }
 
   List<VideoItem> items(Iterable<Video> videos) => videos.map(_item).toList();
-  void close() => _yt.close();
+  void close() {
+    _proxy?.close();
+    _proxy = null;
+    _yt.close();
+  }
 }

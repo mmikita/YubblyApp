@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- YouTube media URLs are one-shot (each dies after ~1 MiB), so audio is
+     relayed through a loopback HTTP proxy in the app process. Everything else
+     stays HTTPS-only: cleartext is allowed for loopback addresses alone. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

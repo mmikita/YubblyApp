@@ -317,6 +317,7 @@ class AppState extends ChangeNotifier {
     _loadedPair = '';
     playing = false;
     buffering = false;
+    await youtube.releaseStreams();
     await refreshHistory();
     notifyListeners();
   }

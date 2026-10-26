@@ -4,8 +4,8 @@
 
 | Sprawdzenie | Wynik | Zakres |
 |---|---|---|
-| `flutter analyze` | PASS — 0 problemów | Kod Dart aplikacji, testy i narzędzie sprawdzające YouTube |
-| `flutter test` | PASS — 9 testów | Poprawne/błędne linki, QR i jego wersja, limity parametrów, format czasu, katalog/dialog dodawania, przywrócenie sesji i przełączenie trybu miksu na ekranie 390 × 844 |
+| `flutter analyze` | PASS — 0 problemów | Kod Dart aplikacji, testy i skrypty diagnostyczne w `tool/` |
+| `flutter test` | PASS — 18 testów | Poprawne/błędne linki, QR i jego wersja, limity parametrów, format czasu, katalog/dialog dodawania, przywrócenie sesji i przełączenie trybu miksu na ekranie 390 × 844, a także proxy strumieni (probe 2-bajtowy, cały utwór przez wiele jednorazowych adresów, seek, 416, zakres `range=` dla `ios`, odpowiedzi HTML, zwolnienie sesji) |
 | Test Java `MixerMathTest` | PASS — 504 009 asercji | Routing, zamiana uszu, przeciwne fazy, centrowanie mono, skończone i bezpieczne wzmocnienia, granice przesunięcia i kierunek korekty prędkości |
 | Wizualna kontrola renderu Flutter | PASS | Wąski ekran odtwarzacza; poprawiono szerokość nagłówka, załadowano font tekstu i ikony do testu |
 | YouTube — metadane i ścieżki | PASS dla `zA-UHB2WcT4` | Tytuł, kanał i 10 ścieżek, m.in. `en-US.4` (oryginał) i `pl.10` |
@@ -46,7 +46,7 @@ Wersja testowa ma wyłączoną minifikację/shrinking Androida. Pierwsza kompila
 | Sprawdzenie | Wynik | Zakres |
 |---|---|---|
 | `flutter analyze` | PASS — 0 problemów | Dart po dodaniu Apple i filtra MP4 |
-| `flutter test` | PASS — 10 testów | W tym nowy test akcji **Odśwież** przy błędzie strumienia |
+| `flutter test` | PASS — 18 testów | W tym test akcji **Odśwież** przy błędzie strumienia i testy lokalnego proxy |
 | `AppleMixerMathTest.swift` | PASS — 528 009 asercji | Routing, zamiana uszu, mono, granice, korekta prędkości, przesunięcie B |
 | `flutter build macos --debug` | PASS | Wspólny silnik AVFoundation + kanał macOS |
 | `flutter build ios --debug --no-codesign` | PASS | Target iOS, AppDelegate, kanał i tap |
@@ -57,7 +57,8 @@ Wersja testowa ma wyłączoną minifikację/shrinking Androida. Pierwsza kompila
 | iOS w tle / ekran blokady | CZĘŚCIOWO | `UIBackgroundModes: audio` i kategoria `playback`; brak `MPRemoteCommandCenter` |
 | Impeller na Apple | PASS | `FLTEnableImpeller` = `false` w `ios/Runner/Info.plist` i `macos/Runner/Info.plist`; Skia/Metal dla Debug, Profile i Release |
 | Czytelny błąd 403 | PASS | `CoreMediaErrorDomain -12660` jest rozwijany z łańcucha `NSError`; UI pokazuje HTTP 403 i przycisk **Odśwież** pobierający nowe adresy |
-| Długie filmy z dubami | OGRANICZENIE ZEWNĘTRZNE | W tym środowisku YouTube zwraca 403 dla kolejnych zakresów bajtów strumieni z wieloma dubami (limity po stronie googlevideo). Dotyczy to także Media3; krótki strumień bez dubów działał z AVFoundation |
+| Długie filmy z dubami | NAPRAWIONE (proxy) | Przyczyną był limit po stronie googlevideo: jeden adres serwuje ~1 MiB, a warianty `ios` przyjmują zakres wyłącznie jako `range=` w zapytaniu. `lib/stream_proxy.dart` dzieli strumień na segmenty 1 MiB, pobiera świeży adres dla każdego segmentu i serwuje graczowi `206 Partial Content`; pokryte testami `test/stream_proxy_test.dart` (probe 2-bajtowy, cały utwór, seek, 416, tryb `ios`, tagi HTML) |
+| Dwie ścieżki językowe jednocześnie | PASS (jednostkowo) | Oba adresy pochodzą z tego samego proxy jako `/media/<id>`; `release()` czyści segmenty przy zmianie sesji, `stop()` w `AppState` zwalnia je jawnie |
 
 ### Wnioski techniczne
 
@@ -65,4 +66,4 @@ Wersja testowa ma wyłączoną minifikację/shrinking Androida. Pierwsza kompila
 - `AVPlayer` po `pause`/`seek` startuje audio z opóźnieniem ~0,5 s, a `seek` natychmiast po nim może zostać anulowany przez `preroll`. Silnik czeka na zakończenie obu `seek`, dodaje 200 ms osadzenia i prerolluje oba odtwarzacze.
 - Część strumieni YouTube ma błędny czas trwania w kontenerze (dwukrotność) i ciszę na końcu; osią czasu jest `durationMs` z metadanych filmu.
 - AVFoundation nie odtwarza WebM/Opus, dlatego iOS/macOS filtrują listę języków do wariantów MP4.
-- Strumienie z `gir=yes` w badanym środowisku serwują ograniczony zakres początkowy, a kolejne żądania bajtów mogą kończyć się HTTP 403. Odświeżenie adresów nie omija tego limitu po stronie googlevideo; obejście wymagałoby serwera/proxy normalizującego zakresy (poza zakresem aplikacji).
+- Strumienie z `gir=yes` serwują w badanym środowisku tylko ograniczony zakres początkowy, a kolejne żądania bajtów kończą się HTTP 403. Obejściem jest lokalne proxy (`lib/stream_proxy.dart`): 1 MiB segmenty, świeży adres do każdego segmentu, normalizacja `Range` (nagłówek → `range=` w zapytaniu), cache na dysku z prefetchem 4 segmentów i sprzątaniem 64 MiB za pozycją odczytu.

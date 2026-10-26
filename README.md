@@ -88,16 +88,20 @@ flutter test
 bash tool/test_native.sh
 # Opcjonalny test sieciowy (bez zapisu mediów):
 dart run tool/probe_youtube.dart zA-UHB2WcT4
+# Opcjonalny test end-to-end lokalnego proxy na prawdziwych adresach YouTube:
+dart run tool/live_proxy_check.dart zA-UHB2WcT4
 ```
 
-`test_native.sh` uruchamia test Javy, jeśli dostępne są `javac` i `java` (na Windowsie można użyć Git Bash), a na macOS dodatkowo kompiluje test matematyki miksera Apple, jeśli dostępny jest `swiftc`. Testy obejmują walidację linków i QR, przywracanie stanu/interfejs na małym ekranie, obsługę sterowania oraz matematykę routingu/bezpiecznych poziomów sygnału. Test sieciowy próbuje jednocześnie odczytać początkowy fragment angielskiej i polskiej ścieżki.
+`test_native.sh` uruchamia test Javy, jeśli dostępne są `javac` i `java` (na Windowsie można użyć Git Bash), a na macOS dodatkowo kompiluje test matematyki miksera Apple, jeśli dostępny jest `swiftc`. Testy obejmują walidację linków i QR, przywracanie stanu/interfejs na małym ekranie, obsługę sterowania, matematykę routingu/bezpiecznych poziomów sygnału oraz lokalne proxy strumieni (`test/stream_proxy_test.dart`: 2-bajtowy probe, cały utwór, seek, 416, adresy `ios` z zakresem w zapytaniu, odpowiedzi HTML). `tool/live_proxy_check.dart` dodatkowo czyta kilka megabajtów prawdziwych ścieżek przez pętlę zwrotną, a `tool/probe_youtube.dart` sprawdza metadane i początkowe fragmenty obu ścieżek.
 
 Szczegółowy wynik walidacji tej paczki: [docs/VALIDATION.md](docs/VALIDATION.md). Kontrola na telefonie: [docs/DEVICE_CHECKLIST.md](docs/DEVICE_CHECKLIST.md).
 
 ## Granice tej wersji
 
 - Platforma odtwarzania: Android (Media3) oraz iOS/macOS (AVFoundation, audio). Adaptery Windows/Web oraz opcjonalny eksport gotowego MP3 do odsłuchu offline nie są zaimplementowane.
-- YouTube jest odczytywany przez nieoficjalny ekstraktor `youtube_explode_dart` 3.1.0. Zmiany YouTube, blokady regionalne, ograniczenia wieku lub wygasłe adresy mogą wymagać ponownego pobrania strumieni/aktualizacji biblioteki. W sprawdzanym środowisku YouTube zwracał 403 dla dalszych zakresów bajtów części strumieni z dubami; dotyczy to również odtwarzania Android/Media3 i nie jest błędem silnika AVFoundation. Ponowienie po odświeżeniu adresów może pomóc, ale pełna naprawa wymaga aktualizacji ekstraktora.
+- YouTube jest odczytywany przez nieoficjalny ekstraktor `youtube_explode_dart` 3.1.0. Zmiany YouTube, blokady regionalne, ograniczenia wieku lub wygasłe adresy mogą wymagać ponownego pobrania strumieni/aktualizacji biblioteki.
+- Adresy `googlevideo.com` są jednorazowe: każdy serwuje około 1 MiB i dalej zwraca HTTP 403 (a warianty klienta `ios` honorują zakres tylko jako parametr `range=` w zapytaniu, nie w nagłówku). Dlatego dźwięk i obraz są przekazywane przez lokalny serwer pętli zwrotnej `127.0.0.1` (`lib/stream_proxy.dart`): dzieli strumień na segmenty 1 MiB, do każdego pobiera świeży adres i odpowiada graczowi poprawnym `206 Partial Content`. Bez tego serwera odtwarzanie kończyło się po pierwszym megabajcie. Proxy wymaga dopuszczenia HTTP do pętli zwrotnej: `NSAllowsLocalNetworking` w `ios/Runner/Info.plist` i `macos/Runner/Info.plist` oraz `android/app/src/main/res/xml/network_security_config.xml` (reszta ruchu pozostaje HTTPS-only). Gdy nie da się utworzyć katalogu tymczasowego, repozytorium wraca do surowych adresów YouTube.
+- Proxy działa w izolacie Fluttera, więc odtwarzanie w tle zależy od życia procesu aplikacji: na Androidzie usługa pierwszoplanowa gra dalej, ale po zabiciu procesu (lub zniszczeniu `FlutterEngine` przez system) strumień się kończy i trzeba go wznowić ręcznie.
 - Dwie ścieżki mają wspólną pozycję czasową z korektą dryfu, lecz nie są jednym mikserem próbek ze wspólnym zegarem sprzętowym. Jakość synchronizacji, Bluetooth, AirPlay, 5× i długie odtwarzanie z wygaszonym ekranem należy potwierdzić na urządzeniu.
 - Aplikacja nie blokuje reklam w innych aplikacjach ani w przeglądarce. Pobiera strumienie samego materiału; nie wycina fragmentów sponsorskich zapisanych w treści.
 - Wymuszone zatrzymanie aplikacji przez system kończy odtwarzanie. Po restarcie odtwarzanie jest wznawiane ręcznie, z ponownie rozwiązanymi adresami.

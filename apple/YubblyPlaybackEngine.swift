@@ -1171,17 +1171,23 @@ final class ApplePlaybackEngine {
         return max(0, int64Value(video["durationMs"]))
     }
 
+    /// Accepts YouTube media links and the app's own loopback proxy.
+    ///
+    /// The proxy is the only way to give AVPlayer stable URLs: every
+    /// googlevideo URL stops working after about a megabyte.
     private func streamURL(_ value: Any?) throws -> URL {
         guard let raw = value as? String else {
             throw ApplePlaybackFailure(message: "Nieprawidłowy adres strumienia YouTube.")
         }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard
-            let url = URL(string: text),
-            url.scheme?.lowercased() == "https",
-            let host = url.host?.lowercased(),
-            host == "googlevideo.com" || host.hasSuffix(".googlevideo.com")
-        else {
+        guard let url = URL(string: text) else {
+            throw ApplePlaybackFailure(message: "Nieprawidłowy adres strumienia YouTube.")
+        }
+        let scheme = url.scheme?.lowercased()
+        let host = url.host?.lowercased() ?? ""
+        let youtube = scheme == "https" && (host == "googlevideo.com" || host.hasSuffix(".googlevideo.com"))
+        let loopback = scheme == "http" && (host == "127.0.0.1" || host == "localhost")
+        guard youtube || loopback else {
             throw ApplePlaybackFailure(message: "Nieprawidłowy adres strumienia YouTube.")
         }
         return url
