@@ -1,0 +1,24 @@
+name: yubbly_app
+description: Two languages, one listening session. A Flutter Android audio player.
+publish_to: none
+version: 0.1.0+1
+environment:
+  sdk: '>=3.9.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  youtube_explode_dart: 3.1.0
+  shared_preferences: ^2.5.3
+  qr_flutter: ^4.1.0
+  share_plus: ^11.1.0
+  path_provider: ^2.1.5
+  mobile_scanner: ^7.1.2
+  url_launcher: ^6.3.2
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/catalog.json
