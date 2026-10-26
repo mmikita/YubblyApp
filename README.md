@@ -57,6 +57,8 @@ flutter run -d macos
 
 Silnik odtwarzania nadal istnieje wyłącznie dla Androida. Na macOS działają katalog, sprawdzanie dostępnych ścieżek, QR, udostępnianie i ekran historii (wpisy powstają w trakcie odtwarzania, więc na macOS pozostaje pusty), a naciśnięcie Odtwórz pokazuje komunikat o braku adaptera audio zamiast błędu kanału platformy. Okno ma minimalny rozmiar 360×640, a skaner QR wymaga zgody na dostęp do kamery.
 
+Renderowanie na macOS korzysta ze Skii (Metal), nie z Impellera: w `macos/Runner/Info.plist` jest ustawione `FLTEnableImpeller` = `false` dla wszystkich konfiguracji (Debug, Profile, Release). Impeller na macOS powodował artefakty graficzne przy przełączaniu widoków. Nie zmienia to Androida ani iOS.
+
 ## Testy
 
 ```sh

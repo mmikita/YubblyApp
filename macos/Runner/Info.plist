@@ -32,5 +32,9 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Impeller on macOS produces rendering glitches when switching views.
+	     Fall back to the Skia (Metal) backend for every build configuration. -->
+	<key>FLTEnableImpeller</key>
+	<false/>
 </dict>
 </plist>
