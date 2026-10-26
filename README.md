@@ -59,6 +59,12 @@ Silnik odtwarzania nadal istnieje wyłącznie dla Androida. Na macOS działają 
 
 Renderowanie na macOS korzysta ze Skii (Metal), nie z Impellera: w `macos/Runner/Info.plist` jest ustawione `FLTEnableImpeller` = `false` dla wszystkich konfiguracji (Debug, Profile, Release). Impeller na macOS powodował artefakty graficzne przy przełączaniu widoków. Nie zmienia to Androida ani iOS.
 
+Znane ograniczenia targetu macOS:
+
+- **Brak odtwarzania dźwięku.** Silnik Media3 istnieje tylko na Androidzie. Kanał `app.yubbly/player` odpowiada na `load` i `play` błędem `PlatformException(UNSUPPORTED_PLATFORM)` z komunikatem „Odtwarzanie audio na macOS nie jest jeszcze zaimplementowane…”, a interfejs pokazuje informację o braku adaptera audio zamiast uruchamiać odtwarzanie.
+- Historia odtwarzania pozostaje pusta, ponieważ wpisy powstają wyłącznie w trakcie rzeczywistego odtwarzania.
+- Katalog, sprawdzanie dostępnych ścieżek, udostępnianie, skaner QR i ustawienia miksu działają normalnie.
+
 ## Testy
 
 ```sh
