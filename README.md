@@ -46,6 +46,17 @@ Wynik: `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`. Pozostałe arc
 
 Ta wersja testowa nie minifikuje kodu Androida: zachowuje metadane zależności Kotlin/ML Kit. Konfiguracja podpisuje kompilację release **kluczem deweloperskim debug**. Do publikacji i trwałych aktualizacji trzeba skonfigurować własny keystore. Projekt zawiera [workflow GitHub Actions](https://github.com/mmikita/YubblyApp/actions) uruchamiany ręcznie lub przy push/PR do main. Po pomyślnym wykonaniu APK są dostępne w artefakcie `YubblyApp-Android` danego uruchomienia.
 
+### macOS (podgląd interfejsu)
+
+Projekt zawiera target macOS do kompilacji i uruchamiania interfejsu na komputerze:
+
+```sh
+flutter pub get
+flutter run -d macos
+```
+
+Silnik odtwarzania nadal istnieje wyłącznie dla Androida. Na macOS działają katalog, sprawdzanie dostępnych ścieżek, QR, udostępnianie i ekran historii (wpisy powstają w trakcie odtwarzania, więc na macOS pozostaje pusty), a naciśnięcie Odtwórz pokazuje komunikat o braku adaptera audio zamiast błędu kanału platformy. Okno ma minimalny rozmiar 360×640, a skaner QR wymaga zgody na dostęp do kamery.
+
 ## Testy
 
 ```sh
@@ -62,7 +73,7 @@ Szczegółowy wynik walidacji tej paczki: [docs/VALIDATION.md](docs/VALIDATION.m
 
 ## Granice tej wersji
 
-- Platforma odtwarzania: Android. Adaptery iOS/Windows/Web oraz opcjonalny eksport gotowego MP3 do odsłuchu offline nie są zaimplementowane.
+- Platforma odtwarzania: Android. Target macOS uruchamia interfejs i funkcje sieciowe, lecz nie ma adaptera audio. Adaptery iOS/Windows/Web oraz opcjonalny eksport gotowego MP3 do odsłuchu offline nie są zaimplementowane.
 - YouTube jest odczytywany przez nieoficjalny ekstraktor `youtube_explode_dart` 3.1.0. Zmiany YouTube, blokady regionalne, ograniczenia wieku lub wygasłe adresy mogą wymagać ponownego pobrania strumieni/aktualizacji biblioteki.
 - Dwie ścieżki mają wspólną pozycję czasową z korektą dryfu, lecz nie są jednym mikserem próbek ze wspólnym zegarem sprzętowym. Jakość synchronizacji, Bluetooth, 5× i długie odtwarzanie z wygaszonym ekranem należy potwierdzić na urządzeniu.
 - Aplikacja nie blokuje reklam w innych aplikacjach ani w przeglądarce. Pobiera strumienie samego materiału; nie wycina fragmentów sponsorskich zapisanych w treści.

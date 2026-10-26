@@ -2,7 +2,7 @@
 
 ## Scope
 
-Flutter UI and Dart domain/data code, with an Android Media3 playback engine. Android 8.0+ (API 26). No server, API key, YouTube account, WebView, or permanent media cache. iOS, Windows, and browser playback adapters are not implemented. Optional offline MP3 export is not implemented in this version.
+Flutter UI and Dart domain/data code, with an Android Media3 playback engine. Android 8.0+ (API 26). The macOS target compiles the same UI and registers `app.yubbly/player` through `MacPlaybackChannel`, which serves an idle snapshot, history and catalog flows but rejects `load`/`play` with an explicit unsupported-platform message. No server, API key, YouTube account, WebView, or permanent media cache. iOS, Windows, and browser playback adapters are not implemented. Optional offline MP3 export is not implemented in this version.
 
 ## Data flow
 
