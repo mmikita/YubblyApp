@@ -8,7 +8,9 @@ treści mediów, jedynie logują statusy HTTP i nagłówki.
 | Skrypt | Do czego służy |
 |---|---|
 | `probe_youtube.dart` | Metadane filmu i początkowe fragmenty angielskiej i polskiej ścieżki. |
-| `live_proxy_check.dart` | End-to-end: wybiera dwie ścieżki jak repozytorium i czyta kilka megabajtów przez `StreamProxy`. |
+| `live_proxy_check.dart` | End-to-end: wybiera dwie ścieżki przez `WEB_EMBEDDED_PLAYER`, rozwiązuje `n` przez Node i czyta kilka megabajtów przez `StreamProxy`. |
+| `live_offline_check.dart` | End-to-end: pobiera dwie pełne ścieżki przez `AudioDownloader` i porównuje rozmiar pliku z manifestem. |
+| `node_solver.js`, `node_solver.dart` | Wersja konsolowa tego samego solvera ejs, którego aplikacja używa w ukrytym WebView; wymaga Node.js. |
 | `probe_403.dart`, `probe_range.dart`, `probe_headers.dart` | Treść i nagłówki odpowiedzi `403` oraz warianty zakresów bajtów. |
 | `probe_clients.dart`, `probe_client_window.dart`, `probe_player.dart`, `probe_dash*.dart`, `probe_hls*.dart` | Zachowanie klientów YouTube: zakresy, manifesty DASH/HLS, segmenty. |
 | `probe_audio.dart`, `probe_tracks.dart`, `probe_dubbed.dart`, `probe_muxed.dart`, `probe_vr.dart` | Wybór i dostępność ścieżek audio, obrazu oraz wersji z dubami. |

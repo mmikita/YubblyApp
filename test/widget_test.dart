@@ -117,13 +117,13 @@ void main() {
       matchesGoldenFile('goldens/player.png'),
     );
     await tester.scrollUntilVisible(
-      find.text('A lewo · B prawo'),
+      find.text('Split-ear · A L / B R'),
       250,
       scrollable: find.byType(Scrollable).first,
     );
     await tester.drag(find.byType(ListView).first, const Offset(0, -250));
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('A lewo · B prawo'));
+    await tester.tap(find.text('Split-ear · A L / B R'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(
       calls.any(

@@ -6,6 +6,9 @@ import Flutter
 import AVFoundation
 import Foundation
 import os
+#if canImport(WebKit)
+import WebKit
+#endif
 
 /// Signal-routing mathematics shared by the macOS and iOS adapters.
 ///
@@ -1171,9 +1174,10 @@ final class ApplePlaybackEngine {
         return max(0, int64Value(video["durationMs"]))
     }
 
-    /// Accepts YouTube media links and the app's own loopback proxy.
+    /// Accepts YouTube media links, the app's own loopback proxy and local
+    /// files inside the app sandbox. Local M4A files let playback work offline.
     ///
-    /// The proxy is the only way to give AVPlayer stable URLs: every
+    /// The proxy is the only way to give AVPlayer stable remote URLs: every
     /// googlevideo URL stops working after about a megabyte.
     private func streamURL(_ value: Any?) throws -> URL {
         guard let raw = value as? String else {
@@ -1187,7 +1191,15 @@ final class ApplePlaybackEngine {
         let host = url.host?.lowercased() ?? ""
         let youtube = scheme == "https" && (host == "googlevideo.com" || host.hasSuffix(".googlevideo.com"))
         let loopback = scheme == "http" && (host == "127.0.0.1" || host == "localhost")
-        guard youtube || loopback else {
+        // Resolve symlinks so `/var` and `/private/var` (iOS) compare equal.
+        let support = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first?.resolvingSymlinksInPath().standardizedFileURL.path
+        let localPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let local = scheme == "file" && url.isFileURL && support != nil
+            && (localPath == support! || localPath.hasPrefix(support! + "/"))
+        guard youtube || loopback || local else {
             throw ApplePlaybackFailure(message: "Nieprawidłowy adres strumienia YouTube.")
         }
         return url
@@ -1350,4 +1362,222 @@ final class ApplePlaybackChannel {
 }
 #endif
 
+
+#if canImport(WebKit) && (canImport(FlutterMacOS) || canImport(Flutter))
+/// Runs the bundled yt-dlp/ejs YouTube n-signature solver in a hidden WebView.
+///
+/// The solver needs a real browser environment (window, document, location).
+/// The WebView is kept offscreen and reused for the lifetime of the app.
+final class AppleJsChallengeChannel: NSObject, WKNavigationDelegate {
+    static let channelName = "app.yubbly/js"
+
+    private struct Request {
+        let playerUrl: String
+        let playerJs: String
+        let challenge: String
+        let result: FlutterResult
+    }
+
+    private let channel: FlutterMethodChannel
+    private var webView: WKWebView?
+    private var loadedSolver = ""
+    /// Dart sends the roughly 2.5 MB player script once per player URL and an
+    /// empty string afterwards; keep the last script for that URL here.
+    private var cachedPlayerUrl = ""
+    private var cachedPlayerJs = ""
+    private var ready = false
+    private var active = false
+    private var queue: [Request] = []
+
+    init(messenger: FlutterBinaryMessenger) {
+        channel = FlutterMethodChannel(
+            name: Self.channelName,
+            binaryMessenger: messenger
+        )
+        super.init()
+        channel.setMethodCallHandler { [weak self] call, result in
+            self?.handle(call, result: result)
+        }
+    }
+
+    deinit {
+        channel.setMethodCallHandler(nil)
+        webView?.removeFromSuperview()
+        webView?.navigationDelegate = nil
+    }
+
+    private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard call.method == "solve",
+              let args = call.arguments as? [String: Any],
+              let solver = args["solver"] as? String,
+              let playerUrl = args["playerUrl"] as? String,
+              let sentPlayerJs = args["playerJs"] as? String,
+              let challenge = args["challenge"] as? String
+        else {
+            result(
+                FlutterError(
+                    code: "SOLVER",
+                    message: "Nieprawidłowe dane solvera JavaScript.",
+                    details: nil
+                )
+            )
+            return
+        }
+        let playerJs: String
+        if !sentPlayerJs.isEmpty {
+            cachedPlayerUrl = playerUrl
+            cachedPlayerJs = sentPlayerJs
+            playerJs = sentPlayerJs
+        } else if playerUrl == cachedPlayerUrl, !cachedPlayerJs.isEmpty {
+            playerJs = cachedPlayerJs
+        } else {
+            result(
+                FlutterError(
+                    code: "SOLVER",
+                    message: "Brak skryptu odtwarzacza dla solvera.",
+                    details: nil
+                )
+            )
+            return
+        }
+        queue.append(
+            Request(
+                playerUrl: playerUrl,
+                playerJs: playerJs,
+                challenge: challenge,
+                result: result
+            )
+        )
+        ensureWebView(solver: solver)
+        pump()
+    }
+
+    private func ensureWebView(solver: String) {
+        if let webView {
+            if loadedSolver != solver {
+                loadedSolver = solver
+                ready = false
+                load(solver, into: webView)
+            }
+            return
+        }
+        let config = WKWebViewConfiguration()
+        let view = WKWebView(frame: .zero, configuration: config)
+        view.navigationDelegate = self
+        attachOffscreen(view)
+        webView = view
+        loadedSolver = solver
+        load(solver, into: view)
+    }
+
+    private func load(_ solver: String, into view: WKWebView) {
+        let html = """
+        <!doctype html>
+        <html><head><meta charset="utf-8"></head>
+        <body><script>\(solver)</script></body></html>
+        """
+        view.loadHTMLString(
+            html,
+            baseURL: URL(string: "https://www.youtube.com/")
+        )
+    }
+
+    private func pump() {
+        guard ready, !active, !queue.isEmpty else { return }
+        active = true
+        let request = queue.removeFirst()
+        let js = """
+        window.__yubblySolveN(
+          \(jsString(request.playerUrl)),
+          \(jsString(request.playerJs)),
+          \(jsString(request.challenge))
+        );
+        """
+        webView?.evaluateJavaScript(js, in: nil, in: .page) {
+            [weak self] result in
+            guard let self else { return }
+            self.active = false
+            switch result {
+            case .failure(let error):
+                request.result(
+                    FlutterError(
+                        code: "SOLVER",
+                        message: "Solver JavaScript: \(error.localizedDescription)",
+                        details: nil
+                    )
+                )
+            case .success(let value):
+                if let value = value as? String {
+                    request.result(value)
+                } else {
+                    request.result(
+                        FlutterError(
+                            code: "SOLVER",
+                            message: "Solver JavaScript nie zwrócił wyniku.",
+                            details: nil
+                        )
+                    )
+                }
+            }
+            self.pump()
+        }
+    }
+
+    private func jsString(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value) else { return "\"\"" }
+        return String(data: data, encoding: .utf8) ?? "\"\""
+    }
+
+    private func attachOffscreen(_ view: WKWebView) {
+        view.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        #if os(macOS)
+        view.alphaValue = 0.01
+        let host = NSApp.keyWindow?.contentView
+            ?? NSApp.windows.first(where: { $0.isVisible })?.contentView
+        host?.addSubview(view)
+        #elseif os(iOS)
+        view.alpha = 0.01
+        if let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first,
+           let window = scene.windows.first(where: { $0.isKeyWindow })
+            ?? scene.windows.first
+        {
+            window.rootViewController?.view.addSubview(view)
+        }
+        #endif
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        ready = true
+        pump()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        failAll("Nie udało się uruchomić solvera JavaScript: \(error.localizedDescription)")
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        failAll("Nie udało się uruchomić solvera JavaScript: \(error.localizedDescription)")
+    }
+
+    private func failAll(_ message: String) {
+        ready = false
+        active = false
+        let pending = queue
+        queue.removeAll()
+        for request in pending {
+            request.result(FlutterError(code: "SOLVER", message: message, details: nil))
+        }
+    }
+}
+#endif
 

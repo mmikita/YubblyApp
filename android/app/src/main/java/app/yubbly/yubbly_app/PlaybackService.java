@@ -130,18 +130,33 @@ public class PlaybackService extends MediaSessionService {
         primary.prepare();secondary.prepare();wanted=true;reconcile();persist();
     }
     /**
-     * googlevideo links, or the app's own loopback proxy. The proxy is the only
-     * way to give ExoPlayer stable URLs: a googlevideo URL stops working after
-     * roughly a megabyte.
+     * googlevideo links, the app's own loopback proxy, or a local file inside
+     * the app sandbox. Local M4A files let the player work fully offline.
      */
     private String requiredUrl(Map<String,Object> args,String key){
         String url=str(args,key,"");android.net.Uri u=android.net.Uri.parse(url);
         String host=u.getHost();String scheme=u.getScheme();
         boolean youtube="https".equals(scheme) && host!=null && (host.equals("googlevideo.com")||host.endsWith(".googlevideo.com"));
         boolean loopback="http".equals(scheme) && ("127.0.0.1".equals(host)||"localhost".equals(host));
-        if(!youtube && !loopback)
+        boolean local="file".equals(scheme) && isOwnedPath(u.getPath());
+        if(!youtube && !loopback && !local)
             throw new IllegalArgumentException("Nieprawidłowy adres strumienia YouTube.");
         return url;
+    }
+    private boolean isOwnedPath(String path){
+        if(path==null)return false;
+        try {
+            java.util.ArrayList<String> roots=new java.util.ArrayList<>();
+            roots.add(getFilesDir().getCanonicalPath());
+            roots.add(getCacheDir().getCanonicalPath());
+            java.io.File external=getExternalFilesDir(null);
+            if(external!=null)roots.add(external.getCanonicalPath());
+            String resolved=new java.io.File(path).getCanonicalPath();
+            for(String root:roots) if(resolved.equals(root)||resolved.startsWith(root+java.io.File.separator))return true;
+        } catch (java.io.IOException ignored) {
+            // A path that cannot be resolved is not one of our files.
+        }
+        return false;
     }
     public void configure(Map<String,Object> config){
         int previousOffset=offset();mix=new HashMap<>(config);session.put("mix",mix);

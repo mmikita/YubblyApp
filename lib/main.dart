@@ -13,6 +13,7 @@ import 'package:youtube_explode_dart/youtube_explode_dart.dart'
     show ChannelUploadsList;
 import 'app_state.dart';
 import 'models.dart';
+import 'offline_library.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,6 +23,13 @@ void main() {
 const mint = Color(0xff8be8c2),
     amber = Color(0xffffc078),
     panel = Color(0xff18232d);
+
+String offlineSizeText(int bytes) {
+  if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
+  if (bytes >= 1 << 20) return '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
+  if (bytes >= 1 << 10) return '${(bytes / (1 << 10)).round()} kB';
+  return '$bytes B';
+}
 
 class YubblyApp extends StatelessWidget {
   final AppState? initialState;
@@ -277,6 +285,8 @@ class _HomeState extends State<Home> {
                           ? player()
                           : tab == 1
                           ? catalog()
+                          : tab == 2
+                          ? library()
                           : history(),
                     ),
                   ),
@@ -289,13 +299,17 @@ class _HomeState extends State<Home> {
       selectedIndex: tab,
       onDestinationSelected: (v) {
         setState(() => tab = v);
-        if (v == 2) act(state.refreshHistory);
+        if (v == 3) act(state.refreshHistory);
       },
       destinations: const [
         NavigationDestination(icon: Icon(Icons.tune), label: 'Odtwarzacz'),
         NavigationDestination(
           icon: Icon(Icons.video_library_outlined),
           label: 'Odkrywaj',
+        ),
+        NavigationDestination(
+          icon: Icon(Icons.offline_pin_outlined),
+          label: 'Biblioteka',
         ),
         NavigationDestination(icon: Icon(Icons.history), label: 'Historia'),
       ],
@@ -351,6 +365,7 @@ class _HomeState extends State<Home> {
         ],
       );
     }
+    final album = state.albums.where((a) => a.video.id == v.id).firstOrNull;
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
@@ -459,25 +474,32 @@ class _HomeState extends State<Home> {
                       icon: const Icon(Icons.replay_10),
                     ),
                     const SizedBox(width: 16),
-                    SizedBox(
-                      width: 74,
-                      height: 58,
-                      child: FilledButton(
-                        onPressed: state.busy || !state.canPlay
-                            ? null
-                            : () => act(state.togglePlayback),
-                        child: state.busy || state.buffering
-                            ? const SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
+                    Tooltip(
+                      message: state.hasLocalPair
+                          ? 'Odtwórz z plików offline'
+                          : 'Odtwórz online',
+                      child: SizedBox(
+                        width: 74,
+                        height: 58,
+                        child: FilledButton(
+                          onPressed: state.busy || !state.canPlay
+                              ? null
+                              : () => act(state.togglePlayback),
+                          child: state.busy || state.buffering
+                              ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Icon(
+                                  state.playing
+                                      ? Icons.pause
+                                      : Icons.play_arrow,
+                                  size: 32,
                                 ),
-                              )
-                            : Icon(
-                                state.playing ? Icons.pause : Icons.play_arrow,
-                                size: 32,
-                              ),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 16),
@@ -491,6 +513,32 @@ class _HomeState extends State<Home> {
                       tooltip: 'Zatrzymaj także w tle',
                       onPressed: () => act(state.stop),
                       icon: const Icon(Icons.stop_circle_outlined),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      state.hasLocalPair
+                          ? Icons.offline_pin
+                          : Icons.cloud_queue,
+                      size: 14,
+                      color: state.hasLocalPair ? mint : Colors.white54,
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        state.hasLocalPair
+                            ? 'Odtwarzanie offline z plików na dysku'
+                            : 'Odtwarzanie online — pobieranie nie jest wymagane',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Colors.white54,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -564,6 +612,109 @@ class _HomeState extends State<Home> {
             color: Colors.white.withValues(alpha: .45),
           ),
         ),
+        const SizedBox(height: 10),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      state.hasLocalPair
+                          ? Icons.offline_pin
+                          : Icons.cloud_download_outlined,
+                      color: state.hasLocalPair ? mint : amber,
+                      size: 19,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        state.hasLocalPair
+                            ? 'Gotowe do słuchania offline'
+                            : 'Słuchaj także bez internetu',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    if (state.downloading)
+                      Text(
+                        '${(state.downloadProgress * 100).round()}%',
+                        style: const TextStyle(
+                          color: amber,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  state.downloading
+                      ? (state.downloadLabel ?? 'Pobieranie…')
+                      : state.hasLocalPair
+                      ? 'M4A/AAC ~128 kbps · ${offlineSizeText(album?.totalBytes ?? 0)} · '
+                            'odtwarzanie bez sieci'
+                      : 'Odtwarzanie online działa od razu. Pobierz oba języki '
+                            '(M4A/AAC ~128 kbps), jeśli chcesz słuchać bez '
+                            'internetu. Pobieranie nie przerywa odtwarzania.',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    height: 1.4,
+                    color: Colors.white60,
+                  ),
+                ),
+                if (state.downloading) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(value: state.downloadProgress),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: state.cancelDownload,
+                      child: const Text('Anuluj'),
+                    ),
+                  ),
+                ] else ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      if (!state.hasLocalPair)
+                        FilledButton.icon(
+                          onPressed: state.busy || !state.canPlay
+                              ? null
+                              : () => act(state.downloadSelected),
+                          icon: const Icon(Icons.download, size: 18),
+                          label: Text(
+                            state.offlinePath(state.trackA ?? '') != null ||
+                                    state.offlinePath(state.trackB ?? '') !=
+                                        null
+                                ? 'Pobierz brakujące offline'
+                                : 'Pobierz A+B offline',
+                          ),
+                        ),
+                      if (album != null && !state.hasLocalPair)
+                        OutlinedButton.icon(
+                          onPressed: state.busy
+                              ? null
+                              : () => act(() => state.openAlbum(album)),
+                          icon: const Icon(
+                            Icons.library_music_outlined,
+                            size: 18,
+                          ),
+                          label: const Text('Użyj pobranych plików'),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
         const SizedBox(height: 20),
         const Text(
           'SPOSÓB SŁUCHANIA',
@@ -578,11 +729,20 @@ class _HomeState extends State<Home> {
           spacing: 8,
           runSpacing: 6,
           children: [
-            mode(MixMode.orbit, 'Płynna zamiana', Icons.sync),
-            mode(MixMode.split, 'A lewo · B prawo', Icons.headphones),
-            mode(MixMode.mono, 'Naprzemiennie mono', Icons.waves),
-            mode(MixMode.together, 'Oba jednocześnie', Icons.merge),
+            mode(MixMode.orbit, MixMode.orbit.chipLabel, Icons.sync),
+            mode(MixMode.split, MixMode.split.chipLabel, Icons.headphones),
+            mode(MixMode.mono, MixMode.mono.chipLabel, Icons.waves),
+            mode(MixMode.together, MixMode.together.chipLabel, Icons.merge),
           ],
+        ),
+        const SizedBox(height: 10),
+        Text(
+          state.mix.mode.summary,
+          style: const TextStyle(
+            fontSize: 11,
+            height: 1.45,
+            color: Colors.white60,
+          ),
         ),
         const SizedBox(height: 12),
         Card(
@@ -667,6 +827,26 @@ class _HomeState extends State<Home> {
                     0,
                     360,
                     (x) => state.changeMix({'phase': x}),
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Wrap(
+                      spacing: 4,
+                      children: [
+                        TextButton(
+                          onPressed: () => state.changeMix({'phase': 0}),
+                          child: const Text('Środek · 0°'),
+                        ),
+                        TextButton(
+                          onPressed: () => state.changeMix({'phase': 270}),
+                          child: const Text('A lewo / B prawo · 270°'),
+                        ),
+                        TextButton(
+                          onPressed: () => state.changeMix({'phase': 90}),
+                          child: const Text('Odwrotnie · 90°'),
+                        ),
+                      ],
+                    ),
                   ),
                   settingSlider(
                     'Mikromodulacja',
@@ -1056,6 +1236,186 @@ class _HomeState extends State<Home> {
       ),
     ),
   );
+  Widget library() {
+    final albums = state.albums;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text(
+          'Biblioteka offline',
+          style: TextStyle(fontSize: 25, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 6),
+        const Text(
+          'Jeden film, podpisany zestaw języków. Pliki M4A/AAC ~128 kbps zostają w pamięci aplikacji.',
+          style: TextStyle(fontSize: 12, color: Colors.white54, height: 1.45),
+        ),
+        const SizedBox(height: 18),
+        if (albums.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 70),
+            child: Column(
+              children: [
+                Icon(Icons.offline_pin_outlined, size: 52, color: mint),
+                SizedBox(height: 16),
+                Text('Brak pobranych zestawów.'),
+                SizedBox(height: 8),
+                Text(
+                  'Otwórz film, wybierz dwa języki i naciśnij „Pobierz A+B”.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+        for (final album in albums)
+          Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: SizedBox(
+                          width: 92,
+                          height: 62,
+                          child: Image.network(
+                            album.video.thumbnail,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Container(
+                              color: panel,
+                              child: const Icon(
+                                Icons.movie_outlined,
+                                color: Colors.white38,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              album.video.title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                height: 1.25,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              album.video.channelName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 11,
+                                color: Colors.white54,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${album.trackList.length} ${album.trackList.length == 1 ? 'język' : 'języki'} · ${offlineSizeText(album.totalBytes)}',
+                              style: const TextStyle(fontSize: 11, color: mint),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final track in album.trackList)
+                        Chip(
+                          visualDensity: VisualDensity.compact,
+                          avatar: const Icon(
+                            Icons.record_voice_over_outlined,
+                            size: 14,
+                          ),
+                          label: Text(
+                            track.label,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: state.busy
+                            ? null
+                            : () => act(() async {
+                                await state.openAlbum(album, play: true);
+                                if (mounted) setState(() => tab = 0);
+                              }),
+                        icon: const Icon(Icons.play_arrow, size: 18),
+                        label: const Text('Odtwórz offline'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: state.busy
+                            ? null
+                            : () => act(() async {
+                                await state.openAlbum(album);
+                                await state.inspect(album.video);
+                                if (mounted) setState(() => tab = 0);
+                              }),
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('Dodaj język'),
+                      ),
+                      IconButton(
+                        tooltip: 'Usuń album z dysku',
+                        onPressed: state.busy
+                            ? null
+                            : () => removeOffline(album),
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> removeOffline(OfflineAlbum album) async {
+    final yes = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Usunąć zestaw offline?'),
+        content: Text(
+          'Pliki języków filmu „${album.video.title}” zostaną usunięte z pamięci aplikacji.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(c, false),
+            child: const Text('Anuluj'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(c, true),
+            child: const Text('Usuń'),
+          ),
+        ],
+      ),
+    );
+    if (yes == true) await act(() => state.removeAlbum(album));
+  }
+
   Widget history() => ListView(
     padding: const EdgeInsets.all(16),
     children: [

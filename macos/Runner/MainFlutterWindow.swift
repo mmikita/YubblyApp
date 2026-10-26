@@ -3,6 +3,7 @@ import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
   private var playbackChannel: MacPlaybackChannel?
+  private var jsChallengeChannel: AppleJsChallengeChannel?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -13,6 +14,9 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     playbackChannel = MacPlaybackChannel(
+      messenger: flutterViewController.engine.binaryMessenger
+    )
+    jsChallengeChannel = AppleJsChallengeChannel(
       messenger: flutterViewController.engine.binaryMessenger
     )
 

@@ -1,22 +1,24 @@
 # YubblyApp
 
-Aplikacja Flutter na **Androida 8.0+**, **iOS 15+** i **macOS 12+** do słuchania dwóch ścieżek językowych jednego filmu YouTube. Bez osobnego serwera i bez pobierania całego filmu na dysk przed odtwarzaniem.
+Aplikacja Flutter na **Androida 8.0+**, **iOS 15+** i **macOS 12+** do słuchania dwóch ścieżek językowych jednego filmu YouTube. Bez osobnego serwera. Audio można odtwarzać strumieniowo albo pobrać jako zestaw offline M4A/AAC ~128 kbps.
 
 ## Szybki start
 
 1. Otwórz **Odkrywaj** i wybierz film z katalogu lub wklej link YouTube przyciskiem `+`.
 2. Poczekaj na sprawdzenie rzeczywiście dostępnych ścieżek audio. Wybierz język A i B.
-3. Wybierz sposób słuchania, załóż słuchawki i naciśnij Odtwórz.
-4. Prędkość 1–5×, głośność i ustawienia miksu zmieniają się na żywo. Aby zmienić języki lub włączyć obraz, najpierw wstrzymaj odtwarzanie.
-5. Na Androidzie po zminimalizowaniu używaj powiadomienia/ekranu blokady. Na iOS i macOS dźwięk działa w tle (iOS ma kategorię `playback`), ale ekran blokady iOS nie ma jeszcze własnych przycisków sterowania. Przycisk Stop zatrzymuje odtwarzanie w tle.
-6. **Udostępnij** tworzy obraz QR z podpisem YubblyApp albo link ustawień. Znajomy skanuje go w aplikacji.
+3. Wybierz sposób słuchania, załóż słuchawki i naciśnij Odtwórz. Możesz też nacisnąć **Pobierz A+B**, aby zapisać oba języki lokalnie i słuchać bez sieci.
+4. Pobrane zestawy są widoczne w **Bibliotece**: jeden film, wiele języków, rozmiar i przycisk „Dodaj język”. Pliki M4A/AAC ~128 kbps zostają w pamięci aplikacji.
+5. Prędkość 1–5×, głośność i ustawienia miksu zmieniają się na żywo. Aby zmienić języki lub włączyć obraz, najpierw wstrzymaj odtwarzanie.
+6. Na Androidzie po zminimalizowaniu używaj powiadomienia/ekranu blokady. Na iOS i macOS dźwięk działa w tle (iOS ma kategorię `playback`), ale ekran blokady iOS nie ma jeszcze własnych przycisków sterowania. Przycisk Stop zatrzymuje odtwarzanie w tle.
+7. **Udostępnij** tworzy obraz QR z podpisem YubblyApp albo link ustawień. Znajomy skanuje go w aplikacji.
 
 Film bez co najmniej dwóch wykrytych ścieżek nie jest przedstawiany jako gotowy do dwujęzycznego odtwarzania. Napisy nie są zamiennikiem dubbingu. Oryginał oznaczamy tylko wtedy, gdy określa go nazwa ścieżki zwrócona przez YouTube; domyślna ścieżka może być dubbingiem.
 
 ## Funkcje
 
 - Dwa niezależne strumienie audio i opcjonalny obraz do 720p (obraz tylko na Androidzie; iOS i macOS odtwarzają samo audio).
-- Stały podział A/lewo i B/prawo, sinusoidalna zamiana stron, naprzemienny miks mono oraz oba języki jednocześnie.
+- Biblioteka offline: po wyborze języków pobiera pełne pliki M4A/AAC ~128 kbps, grupuje je pod jednym filmem i pozwala dociągnąć kolejne języki. Gdy komplet A+B jest lokalny, odtwarzanie nie używa sieci ani proxy. W obecnym środowisku YouTube może blokować pełny zakres — patrz „Granice tej wersji”.
+- Tryby zgodne z Wiki: `split-ear` (A lewo / B prawo), `dual-combo` (sinusoidalna zamiana stron w obu uszach), `mono-combo` (oba w centrum) oraz dodatkowy stały miks.
 - Długość cyklu 2–300 s, krzywa equal-power/liniowa, kontrast, faza, mikromodulacja, zamiana uszu i korekta czasu ±3 s.
 - Sterowanie z powiadomienia, obsługa utraty audio focus, odłączenia słuchawek, buforowania i wspólnego przewijania.
 - Historia z pozycją i oznaczeniem ukończenia, przywrócenie ostatniej sesji, ulubione, dodawanie/usuwanie filmów i kanałów.
@@ -90,6 +92,8 @@ bash tool/test_native.sh
 dart run tool/probe_youtube.dart zA-UHB2WcT4
 # Opcjonalny test end-to-end lokalnego proxy na prawdziwych adresach YouTube:
 dart run tool/live_proxy_check.dart zA-UHB2WcT4
+# Pełny pobór dwóch ścieżek (wymaga Node.js — solver `n`):
+dart run tool/live_offline_check.dart zA-UHB2WcT4
 ```
 
 `test_native.sh` uruchamia test Javy, jeśli dostępne są `javac` i `java` (na Windowsie można użyć Git Bash), a na macOS dodatkowo kompiluje test matematyki miksera Apple, jeśli dostępny jest `swiftc`. Testy obejmują walidację linków i QR, przywracanie stanu/interfejs na małym ekranie, obsługę sterowania, matematykę routingu/bezpiecznych poziomów sygnału oraz lokalne proxy strumieni (`test/stream_proxy_test.dart`: 2-bajtowy probe, cały utwór, seek, 416, adresy `ios` z zakresem w zapytaniu, odpowiedzi HTML). `tool/live_proxy_check.dart` dodatkowo czyta kilka megabajtów prawdziwych ścieżek przez pętlę zwrotną, a `tool/probe_youtube.dart` sprawdza metadane i początkowe fragmenty obu ścieżek.
@@ -98,13 +102,13 @@ Szczegółowy wynik walidacji tej paczki: [docs/VALIDATION.md](docs/VALIDATION.m
 
 ## Granice tej wersji
 
-- Platforma odtwarzania: Android (Media3) oraz iOS/macOS (AVFoundation, audio). Adaptery Windows/Web oraz opcjonalny eksport gotowego MP3 do odsłuchu offline nie są zaimplementowane.
+- Platforma odtwarzania: Android (Media3) oraz iOS/macOS (AVFoundation, audio). Adaptery Windows/Web nie są zaimplementowane. Offline zapisuje M4A/AAC ~128 kbps; eksport prawdziwego MP3 (wymagający dekodera AAC/Opus i enkodera LAME) jest osobnym, przyszłym krokiem.
 - YouTube jest odczytywany przez nieoficjalny ekstraktor `youtube_explode_dart` 3.1.0. Zmiany YouTube, blokady regionalne, ograniczenia wieku lub wygasłe adresy mogą wymagać ponownego pobrania strumieni/aktualizacji biblioteki.
-- Adresy `googlevideo.com` są jednorazowe: każdy serwuje około 1 MiB i dalej zwraca HTTP 403 (a warianty klienta `ios` honorują zakres tylko jako parametr `range=` w zapytaniu, nie w nagłówku). Dlatego dźwięk i obraz są przekazywane przez lokalny serwer pętli zwrotnej `127.0.0.1` (`lib/stream_proxy.dart`): dzieli strumień na segmenty 1 MiB, do każdego pobiera świeży adres i odpowiada graczowi poprawnym `206 Partial Content`. Bez tego serwera odtwarzanie kończyło się po pierwszym megabajcie. Proxy wymaga dopuszczenia HTTP do pętli zwrotnej: `NSAllowsLocalNetworking` w `ios/Runner/Info.plist` i `macos/Runner/Info.plist` oraz `android/app/src/main/res/xml/network_security_config.xml` (reszta ruchu pozostaje HTTPS-only). Gdy nie da się utworzyć katalogu tymczasowego, repozytorium wraca do surowych adresów YouTube.
+- Adresy `googlevideo.com` z klienta natywnego w badanym środowisku (26.10.2026) serwują tylko pierwszy ~1 MiB. Aplikacja używa więc najpierw `WEB_EMBEDDED_PLAYER`, który zwraca bezpośrednie URL-e dla wszystkich ścieżek językowych. Parametr `n` jest rozwiązywany przez wbudowany solver yt-dlp/ejs w ukrytym WebView (macOS/iOS/Android); po podmianie `n` zakresy działają bez limitu — sprawdzono pobranie dwóch pełnych utworów po 56 MB i strumieniowanie obu ścieżek przez lokalne proxy. Gdy solver lub osadzony klient jest niedostępny, repozytorium wraca do klienta natywnego. Proxy wymaga dopuszczenia HTTP do pętli zwrotnej: `NSAllowsLocalNetworking` w `ios/Runner/Info.plist` i `macos/Runner/Info.plist` oraz `android/app/src/main/res/xml/network_security_config.xml` (reszta ruchu pozostaje HTTPS-only).
 - Proxy działa w izolacie Fluttera, więc odtwarzanie w tle zależy od życia procesu aplikacji: na Androidzie usługa pierwszoplanowa gra dalej, ale po zabiciu procesu (lub zniszczeniu `FlutterEngine` przez system) strumień się kończy i trzeba go wznowić ręcznie.
 - Dwie ścieżki mają wspólną pozycję czasową z korektą dryfu, lecz nie są jednym mikserem próbek ze wspólnym zegarem sprzętowym. Jakość synchronizacji, Bluetooth, AirPlay, 5× i długie odtwarzanie z wygaszonym ekranem należy potwierdzić na urządzeniu.
 - Aplikacja nie blokuje reklam w innych aplikacjach ani w przeglądarce. Pobiera strumienie samego materiału; nie wycina fragmentów sponsorskich zapisanych w treści.
-- Wymuszone zatrzymanie aplikacji przez system kończy odtwarzanie. Po restarcie odtwarzanie jest wznawiane ręcznie, z ponownie rozwiązanymi adresami.
+- Wymuszone zatrzymanie aplikacji przez system kończy odtwarzanie. Po restarcie odtwarzanie jest wznawiane ręcznie; dla pobranego zestawu A+B wystarczy otworzyć album w Bibliotece i nie trzeba rozwiązywać adresów YouTube.
 
 ## Źródła i konstrukcja
 

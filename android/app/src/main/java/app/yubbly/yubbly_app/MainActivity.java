@@ -15,6 +15,7 @@ import java.util.*;
 @UnstableApi
 public class MainActivity extends FlutterActivity {
     private MethodChannel channel;
+    private JsChallengeBridge jsChallenge;
     private PlaybackService service;
     private final List<Runnable> pending=new ArrayList<>();
     private boolean bound=false;
@@ -30,6 +31,7 @@ public class MainActivity extends FlutterActivity {
         super.configureFlutterEngine(engine);
         initialLink=extractLink(getIntent());
         channel=new MethodChannel(engine.getDartExecutor().getBinaryMessenger(),"app.yubbly/player");
+        jsChallenge=new JsChallengeBridge(this,engine.getDartExecutor().getBinaryMessenger());
         channel.setMethodCallHandler((call,result)->{
             if(call.method.equals("initialLink")){result.success(initialLink);initialLink=null;return;}
             Runnable action=()->{
@@ -73,6 +75,7 @@ public class MainActivity extends FlutterActivity {
         String link=extractLink(intent);if(link!=null){if(channel!=null)channel.invokeMethod("incoming",link);else initialLink=link;}}
     @Override protected void onDestroy(){
         if(channel!=null)channel.setMethodCallHandler(null);
+        if(jsChallenge!=null){jsChallenge.dispose();jsChallenge=null;}
         if(bound){unbindService(connection);bound=false;}service=null;super.onDestroy();
     }
     private static class VideoSurface implements PlatformView {

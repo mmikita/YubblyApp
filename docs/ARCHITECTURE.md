@@ -2,17 +2,18 @@
 
 ## Scope
 
-Flutter UI and Dart domain/data code with three native playback targets: Android 8.0+ (API 26) via Media3, plus iOS 15+ and macOS 12+ via a shared AVFoundation engine in `apple/YubblyPlaybackEngine.swift`. Android registers its channel from `MainActivity`; Apple targets register the same `app.yubbly/player` channel through `ApplePlaybackChannel` (macOS via `MacPlaybackChannel`, iOS via `AppDelegate`). macOS and iOS render through Skia on Metal because their `Info.plist` files set `FLTEnableImpeller` to `false`; Impeller produced graphical glitches when switching views. No server, API key, YouTube account, WebView, or permanent media cache. Windows and browser playback adapters are not implemented. Optional offline MP3 export is not implemented in this version.
+Flutter UI and Dart domain/data code with three native playback targets: Android 8.0+ (API 26) via Media3, plus iOS 15+ and macOS 12+ via a shared AVFoundation engine in `apple/YubblyPlaybackEngine.swift`. Android registers its channel from `MainActivity`; Apple targets register the same `app.yubbly/player` channel through `ApplePlaybackChannel` (macOS via `MacPlaybackChannel`, iOS via `AppDelegate`). macOS and iOS render through Skia on Metal because their `Info.plist` files set `FLTEnableImpeller` to `false`; Impeller produced graphical glitches when switching views. A hidden, 1×1 platform WebView is used only to run the bundled ejs solver that translates YouTube's `n` signature; it never displays YouTube or user media. There is no server, API key, or YouTube account. Windows and browser playback adapters are not implemented. Offline audio is stored as M4A/AAC ~128 kbps in the app support directory; true MP3 export is not implemented yet.
 
 ## Data flow
 
 1. `YoutubeRepository` resolves a video, fetches audio manifests, groups by full track identifier, and preserves YouTube's display labels.
 2. `AppState` stores the selected video, two track IDs, listening position, and `MixSettings`.
-3. Starting playback resolves separate fresh manifests for A and B. A third fresh manifest is requested only for video mode. Signed stream URLs stay in memory and are excluded from QR codes, history, and disk preferences.
-4. `PlaybackService` owns two ExoPlayers independently of Flutter's Activity. Each uses a PCM audio processor to downmix its input and route it into stereo. Android sums their outputs.
-5. On iOS/macOS, `ApplePlaybackEngine` owns two `AVPlayer`s. Each `AVPlayerItem` gets an `AVMutableAudioMix` whose `MTAudioProcessingTap` performs the same downmix and stereo routing; AVFoundation sums the two player outputs. `AVAudioSession` (iOS, category `playback`) handles background audio and interruptions.
-6. A MediaSession exposes play, pause, seek, speed and stop through paired commands. MediaSessionService supplies the playback notification/foreground lifecycle. Wake mode is network-aware; audio focus and unplugged headphones pause both streams. The Apple channel exposes the same commands to Flutter.
-7. Native history writes every five seconds while a session is loaded and on pause/stop/destruction. Flutter can close without becoming responsible for persisting playback progress. At most the most recent five seconds may be lost on an abrupt process kill. Apple stores the session, position and history in `UserDefaults`.
+3. `OfflineLibrary` stores an album per video and any number of language tracks. Each track is a complete M4A/AAC file in the app support directory; `library.json` keeps only relative file names and metadata. The library validates files on startup and drops missing entries.
+4. Starting playback first checks whether both selected tracks have local files. If so, it passes `file://` URLs to the native player and skips YouTube and the proxy entirely. Otherwise `YoutubeRepository` asks `WebEmbeddedClient` for a cached, multi-language manifest, solves each `n` value in the hidden WebView and registers both tracks with the loopback proxy. A third stream is requested only for video mode. If the embedded path is unavailable the repository falls back to separate native-client manifests for A and B. Signed stream URLs stay in memory and are excluded from QR codes, history, and disk preferences.
+5. `PlaybackService` owns two ExoPlayers independently of Flutter's Activity. Each uses a PCM audio processor to downmix its input and route it into stereo. Android sums their outputs.
+6. On iOS/macOS, `ApplePlaybackEngine` owns two `AVPlayer`s. Each `AVPlayerItem` gets an `AVMutableAudioMix` whose `MTAudioProcessingTap` performs the same downmix and stereo routing; AVFoundation sums the two player outputs. `AVAudioSession` (iOS, category `playback`) handles background audio and interruptions.
+7. A MediaSession exposes play, pause, seek, speed and stop through paired commands. MediaSessionService supplies the playback notification/foreground lifecycle. Wake mode is network-aware; audio focus and unplugged headphones pause both streams. The Apple channel exposes the same commands to Flutter.
+8. Native history writes every five seconds while a session is loaded and on pause/stop/destruction. Flutter can close without becoming responsible for persisting playback progress. At most the most recent five seconds may be lost on an abrupt process kill. Apple stores the session, position and history in `UserDefaults`.
 
 ## Mixing
 
@@ -22,14 +23,16 @@ Let `t` be the media position in seconds and `T` the full cycle length:
 
 Linear crossfade uses `a = 1-u`, `b = u`; equal-power uses `a = cos(πu/2)`, `b = sin(πu/2)`. Contrast raises each envelope to a configurable exponent followed by sum/power normalization. Optional opposing micro-modulation is bounded to 50%. Constant conservative headroom prevents correlated sources from clipping after summation.
 
-| UI mode | A → L/R | B → L/R |
-|---|---|---|
-| A lewo · B prawo | 1, 0 | 0, 1 |
-| Płynna zamiana | a, b | b, a |
-| Naprzemiennie mono | a, a | b, b |
-| Oba jednocześnie | 0.5, 0.5 | 0.5, 0.5 |
+| UI mode | Wiki name | A → L/R | B → L/R |
+|---|---|---|---|
+| Dual-combo | `dual-combo` | a, b | b, a |
+| Split-ear | `split-ear` | 1, 0 | 0, 1 |
+| Mono-combo | `mono-combo` | a, a | b, b |
+| Stały miks | — (dodatkowy) | 0.5, 0.5 | 0.5, 0.5 |
 
 Here a/b include micro-modulation and headroom. The period is measured in source media time: at 2× speed a 60-second cycle takes 30 real seconds. Per-sample smoothing of gain changes uses a 10 ms time constant. Master volume is applied equally to both players.
+
+At `phase = 0°` the envelopes meet in the centre (`a = b`), so dual-combo starts with both languages equally present in both ears. To start with A fully on the left and B fully on the right — the situation drawn as “phase 0°” in the Wiki table — set the phase to `270°` (or `90°` for the opposite side). The two languages always use opposite routing, so B automatically starts from the other channel.
 
 Android applies the matrix in a Media3 `AudioProcessor`. Apple applies the same math inside one `MTAudioProcessingTap` per `AVPlayerItem`, handling planar/interleaved float32 or int16 buffers. The tap folds each source to mono before routing, so both platforms deliberately discard the source's own stereo image.
 
@@ -45,9 +48,11 @@ This is media-time synchronization of two native players, not a sample-locked si
 
 ## YouTube behavior
 
-`youtube_explode_dart` 3.1.0 is pinned. The app uses regular audio-only progressive streams and optional video-only MP4 ≤720p. Fragment-only/HLS formats are currently excluded. This can reduce the list on some videos. Library extraction can fail for private, age-restricted, geo-blocked, live, or otherwise unavailable content. It can also fail when YouTube changes extraction requirements. Errors are presented without silently replacing a selected language.
+`youtube_explode_dart` 3.1.0 remains the fallback and metadata source. For playback and downloads the app first asks YouTube's `WEB_EMBEDDED_PLAYER` for a manifest. That client returns direct HTTPS URLs for every language variant, including multiple dubbed tracks. Its URLs contain an `n` challenge, so the app fetches the matching main player JavaScript and runs the bundled yt-dlp/ejs solver in a hidden platform WebView (`app.yubbly/js`). Only the transformed `n` value is inserted back into the URL; the solver does not receive cookies, accounts or media bytes. Native bridges cache the player script by URL, so subsequent challenges for the same player send an empty payload instead of another ~2.5 MB; a failed call retries once with the full script. Refreshing a manifest reuses the cached session/player JS and only requests a new player response, because re-downloading the player script can be slow and rate-limited. If the embedded client, player script or solver is unavailable, the repository falls back to the native `androidSdkless` manifest (which still carries the older per-URL limit).
 
 On iOS/macOS `AppState.requiresMp4Audio` filters the language list to tracks that have an MP4 stream, because AVFoundation cannot decode YouTube's WebM/Opus variants. Android still falls back to WebM when no MP4 variant exists.
+
+During validation on 26.10.2026 the native client's signed URLs still served only their first ~1 MiB. The `WEB_EMBEDDED_PLAYER` path with a solved `n` serves arbitrary ranges: two 56 MB AAC tracks were downloaded end-to-end, and both language tracks streamed through `StreamProxy` (3 MiB each). The hidden WebView is therefore an extraction component, not an in-app browser; it never displays video or loads the YouTube page for the user.
 
 YouTube's `audioIsDefault` is displayed as “domyślna”; it is not treated as proof of original audio. The original designation is retained when it appears in the returned track name.
 
@@ -56,11 +61,12 @@ The native player requests content streams and does not load YouTube's advertisi
 ## Persistence and sharing
 
 - Flutter SharedPreferences: editable catalog, favorites, most recent mix preferences.
+- Offline library: media files under the platform application-support directory plus `library.json` with video metadata, language labels, bitrate, size and relative file names. Downloads are written to `.part` files in 1 MiB segments and renamed only after the complete size is verified.
 - Android private SharedPreferences: last session, media position, up to 500 history records, listened time and completed marker. Android backup is disabled.
 - Apple `UserDefaults`: the same session/position/history record under `yubbly.playback.*`; history from the old macOS stub key is migrated when present.
 - iOS `Info.plist` declares `UIBackgroundModes: audio`; the audio session uses category `playback` so sound continues with the screen locked. Lock-screen metadata/remote commands are not implemented yet.
 - QR schema: `yubbly://listen?v=1&d=<base64url JSON>` with video ID, track IDs, media position, and mix settings. Payloads are size-limited and validated; numerical values are clamped. No media URL, credentials, or user identifiers are shared.
-- Native stream bridge accepts only HTTPS `googlevideo.com` destinations supplied by the resolver. User inputs accept only actual YouTube hosts, not lookalike hostnames.
+- Native stream bridge accepts only HTTPS `googlevideo.com` destinations supplied by the resolver, loopback URLs from the app's own proxy, or `file://` URLs inside the app support sandbox for offline tracks. User inputs accept only actual YouTube hosts, not lookalike hostnames.
 - The custom scheme supports app opening from compatible scanners; the in-app QR scanner also validates the versioned payload. Imported settings never autoplay.
 
 ## Source attribution

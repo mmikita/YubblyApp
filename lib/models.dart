@@ -2,6 +2,39 @@ import 'dart:convert';
 
 enum MixMode { split, orbit, mono, together }
 
+/// User-facing names and explanations aligned with the Youbbly Wiki.
+///
+/// The serialized enum names stay unchanged for saved mixes and QR codes;
+/// only the presentation uses the Wiki vocabulary.
+extension MixModeInfo on MixMode {
+  String get wikiName => switch (this) {
+    MixMode.split => 'split-ear',
+    MixMode.orbit => 'dual-combo',
+    MixMode.mono => 'mono-combo',
+    MixMode.together => 'stały miks',
+  };
+
+  String get chipLabel => switch (this) {
+    MixMode.split => 'Split-ear · A L / B R',
+    MixMode.orbit => 'Dual-combo · L↔R',
+    MixMode.mono => 'Mono-combo · centrum',
+    MixMode.together => 'Stały miks · oba',
+  };
+
+  String get summary => switch (this) {
+    MixMode.orbit =>
+      'Dual-combo: oba języki słychać w obu uszach. Gdy jeden przesuwa się '
+          'w lewo, drugi przesuwa się w prawo, a po pół cyklu role się odwracają.',
+    MixMode.split =>
+      'Split-ear: język A stale w lewym uchu, język B stale w prawym. '
+          'Bez sinusoidalnej zamiany.',
+    MixMode.mono =>
+      'Mono-combo: oba języki w centrum, z naprzemienną głośnością A i B.',
+    MixMode.together =>
+      'Stały miks: oba języki jednocześnie w obu uszach, bez falowania.',
+  };
+}
+
 class MixSettings {
   final MixMode mode;
   final String curve;

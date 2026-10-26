@@ -3,14 +3,25 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'audio_downloader.dart';
+import 'js_challenge_solver.dart';
 import 'models.dart';
+import 'offline_library.dart';
 import 'youtube_repository.dart';
 
 class AppState extends ChangeNotifier {
   static const native = MethodChannel('app.yubbly/player');
   final YoutubeRepository youtube;
-  AppState({YoutubeRepository? youtube})
-    : youtube = youtube ?? YoutubeRepository();
+  final OfflineLibrary offline;
+  AppState({YoutubeRepository? youtube, OfflineLibrary? offline})
+    : youtube =
+          youtube ??
+          YoutubeRepository(
+            challengeSolver: nativePlaybackSupported
+                ? PlatformJsChallengeSolver()
+                : null,
+          ),
+      offline = offline ?? OfflineLibrary();
 
   /// Android, iOS and macOS all expose the `app.yubbly/player` channel.
   static bool get nativePlaybackSupported =>
@@ -36,8 +47,11 @@ class AppState extends ChangeNotifier {
       busy = false,
       playing = false,
       buffering = false,
-      withVideo = false;
-  String? error, trackA, trackB;
+      withVideo = false,
+      downloading = false;
+  String? error, trackA, trackB, downloadLabel;
+  double downloadProgress = 0;
+  bool _cancelDownload = false;
   String _loadedPair = '';
   VideoItem? current;
   List<AudioChoice> tracks = [];
@@ -50,10 +64,36 @@ class AppState extends ChangeNotifier {
   final Map<String, int> verifiedTracks = {};
   bool get canPlay =>
       current != null && trackA != null && trackB != null && trackA != trackB;
-  String get pair => '${current?.id}|$trackA|$trackB|$withVideo';
+  List<OfflineAlbum> get albums => offline.albums;
+  String? offlinePath(String trackId) {
+    final video = current;
+    return video == null ? null : offline.pathFor(video.id, trackId);
+  }
+
+  bool get hasLocalPair {
+    final a = trackA, b = trackB;
+    if (current == null || a == null || b == null || a == b) return false;
+    return offlinePath(a) != null && offlinePath(b) != null;
+  }
+
+  String get pair =>
+      '${current?.id}|$trackA|$trackB|$withVideo|${hasLocalPair ? 'local' : 'net'}';
+
+  /// Old sessions stored IDs such as `pl.10`; current extraction uses `pl`.
+  static String? _resolveTrack(String? wanted, Iterable<AudioChoice> list) {
+    if (wanted == null) return null;
+    if (list.any((t) => t.id == wanted)) return wanted;
+    final base = wanted.split('.').first;
+    return list.any((t) => t.id == base) ? base : null;
+  }
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
+    try {
+      await offline.init();
+    } catch (e) {
+      error = 'Nie udało się otworzyć biblioteki offline: $e';
+    }
     final seed =
         jsonDecode(await rootBundle.loadString('assets/catalog.json'))
             as Map<String, dynamic>;
@@ -130,6 +170,12 @@ class AppState extends ChangeNotifier {
         if (trackB != null)
           AudioChoice(trackB!, j['labelB'] as String? ?? trackB!, false),
       ];
+      final album = offline.albumFor(current!.id);
+      if (album != null) {
+        tracks = album.trackList.map((t) => t.choice).toList();
+      }
+      trackA = _resolveTrack(trackA, tracks);
+      trackB = _resolveTrack(trackB, tracks);
       if (s['loaded'] == true) _loadedPair = pair;
     }
     if (session is Map &&
@@ -188,13 +234,9 @@ class AppState extends ChangeNotifier {
         await _inspect(recipe.videoId);
         mix = recipe.settings;
         positionMs = recipe.positionMs;
-        trackA = tracks.any((t) => t.id == recipe.trackA)
-            ? recipe.trackA
-            : null;
-        trackB = tracks.any((t) => t.id == recipe.trackB)
-            ? recipe.trackB
-            : null;
-        if (trackA == null || trackB == null) {
+        trackA = _resolveTrack(recipe.trackA, tracks);
+        trackB = _resolveTrack(recipe.trackB, tracks);
+        if (trackA == null || trackB == null || trackA == trackB) {
           error =
               'Języki z kodu QR nie są obecnie dostępne. Wybierz je ponownie.';
         }
@@ -262,6 +304,156 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Downloads both currently selected languages.
+  Future<void> downloadSelected() async {
+    final a = trackA, b = trackB;
+    if (a == null || b == null || a == b) return;
+    await downloadTracks([a, b]);
+  }
+
+  /// Downloads one language and adds it to the current video's offline album.
+  Future<void> downloadTrack(String trackId) => downloadTracks([trackId]);
+
+  Future<void> downloadTracks(List<String> trackIds) async {
+    final video = current;
+    if (video == null || trackIds.isEmpty || busy || downloading) return;
+    await run(() async {
+      downloading = true;
+      _cancelDownload = false;
+      downloadProgress = 0;
+      downloadLabel = 'Przygotowanie pobierania…';
+      error = null;
+      notifyListeners();
+      try {
+        await offline.ensureAlbum(video);
+        for (var i = 0; i < trackIds.length; i++) {
+          final id = trackIds[i];
+          if (offline.pathFor(video.id, id) != null) {
+            downloadProgress = (i + 1) / trackIds.length;
+            notifyListeners();
+            continue;
+          }
+          final choice = tracks.where((t) => t.id == id).firstOrNull;
+          final label = choice?.name ?? id;
+          downloadLabel = 'Pobieranie $label · ${i + 1}/${trackIds.length}';
+          notifyListeners();
+          final directory = await offline.albumDirectory(video.id);
+          final downloaded = await youtube.downloadAudio(
+            videoId: video.id,
+            trackId: id,
+            directory: directory,
+            mp4Only: requiresMp4Audio,
+            onProgress: (received, total) {
+              if (total <= 0) return;
+              downloadProgress = ((i + received / total) / trackIds.length)
+                  .clamp(0.0, 1.0);
+              notifyListeners();
+            },
+            isCancelled: () => _cancelDownload,
+          );
+          await offline.saveTrack(
+            video,
+            OfflineTrack(
+              trackId: id,
+              label: choice?.name ?? downloaded.label,
+              fileName: downloaded.file.uri.pathSegments.last,
+              bytes: downloaded.bytes,
+              bitrate: downloaded.bitrate,
+              container: downloaded.container,
+              downloadedAtMs: DateTime.now().millisecondsSinceEpoch,
+              isDefault: choice?.isDefault ?? downloaded.isDefault,
+            ),
+          );
+          downloadProgress = (i + 1) / trackIds.length;
+          notifyListeners();
+        }
+        _loadedPair = '';
+        downloadLabel = 'Zapisano offline';
+      } on DownloadCancelled {
+        downloadLabel = 'Pobieranie anulowane';
+        error = 'Pobieranie anulowane. Kolejna próba wznowi plik.';
+      } finally {
+        try {
+          if (offline.albumFor(video.id)?.tracks.isEmpty ?? false) {
+            await offline.discardEmptyAlbum(video.id);
+          }
+        } finally {
+          downloading = false;
+          notifyListeners();
+        }
+      }
+    });
+  }
+
+  void cancelDownload() {
+    if (!downloading) return;
+    _cancelDownload = true;
+    notifyListeners();
+  }
+
+  /// Loads an offline album into the player. With [play] the local files start
+  /// immediately; otherwise the user can adjust languages and settings first.
+  Future<void> openAlbum(
+    OfflineAlbum album, {
+    String? a,
+    String? b,
+    bool play = false,
+  }) async {
+    await run(() async {
+      await native.invokeMethod('stop');
+      _loadedPair = '';
+      playing = false;
+      buffering = false;
+      current = album.video;
+      withVideo = false;
+      tracks = album.trackList.map((t) => t.choice).toList();
+      final ids = tracks.map((t) => t.id).toList();
+      if (ids.isEmpty) throw StateError('Album nie ma pobranych ścieżek.');
+      trackA = a != null && ids.contains(a)
+          ? a
+          : (ids.contains(trackA) ? trackA : ids.first);
+      trackB = b != null && ids.contains(b) && b != trackA
+          ? b
+          : (ids.contains(trackB) && trackB != trackA
+                ? trackB
+                : ids.firstWhere(
+                    (id) => id != trackA,
+                    orElse: () => ids.first,
+                  ));
+      durationMs = album.video.durationMs;
+      await refreshHistory();
+      final previous = history
+          .where((h) => h['id'] == album.video.id)
+          .firstOrNull;
+      positionMs = previous?['complete'] == true
+          ? 0
+          : (previous?['positionMs'] as num?)?.toInt() ?? 0;
+      notifyListeners();
+    });
+    if (play && canPlay) await togglePlayback();
+  }
+
+  Future<void> removeAlbum(OfflineAlbum album) async {
+    await run(() async {
+      if (current?.id == album.video.id) {
+        await native.invokeMethod('stop');
+        _loadedPair = '';
+        playing = false;
+        buffering = false;
+      }
+      await offline.removeAlbum(album.video.id);
+      if (current?.id == album.video.id) {
+        tracks = [];
+        trackA = null;
+        trackB = null;
+        current = null;
+        positionMs = 0;
+        durationMs = 0;
+      }
+      notifyListeners();
+    });
+  }
+
   Future<void> togglePlayback({bool refreshStreams = false}) async {
     if (busy) return;
     if ((playing || buffering) && !refreshStreams) {
@@ -279,21 +471,34 @@ class AppState extends ChangeNotifier {
         await native.invokeMethod('play');
         return;
       }
-      final urls = await youtube.streams(
-        current!.id,
-        trackA!,
-        trackB!,
-        video: withVideo && hasVideoSurface,
-        mp4Only: requiresMp4Audio,
-      );
+      final localA = offlinePath(trackA!);
+      final localB = offlinePath(trackB!);
+      final local = localA != null && localB != null;
+      final urls = local
+          ? <String, dynamic>{
+              'urlA': Uri.file(localA).toString(),
+              'urlB': Uri.file(localB).toString(),
+              'videoUrl': null,
+            }
+          : await youtube.streams(
+              current!.id,
+              trackA!,
+              trackB!,
+              video: withVideo && hasVideoSurface,
+              mp4Only: requiresMp4Audio,
+            );
+      final useVideo = withVideo && hasVideoSurface && !local;
       final session = {
         'video': current!.toJson(),
         'trackA': trackA,
         'trackB': trackB,
-        'labelA': tracks.firstWhere((t) => t.id == trackA).name,
-        'labelB': tracks.firstWhere((t) => t.id == trackB).name,
+        'labelA':
+            tracks.where((t) => t.id == trackA).firstOrNull?.name ?? trackA,
+        'labelB':
+            tracks.where((t) => t.id == trackB).firstOrNull?.name ?? trackB,
         'mix': mix.toJson(),
-        'withVideo': withVideo,
+        'withVideo': useVideo,
+        'offline': local,
       };
       await native.invokeMethod('load', {
         ...urls,

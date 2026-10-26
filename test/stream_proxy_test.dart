@@ -165,6 +165,26 @@ void main() {
     expect(host.tokens, greaterThanOrEqualTo(4));
   });
 
+  test('refreshes a spent URL instead of retrying it forever', () async {
+    final stale = await host.mint();
+    var refreshes = 0;
+    final url = await proxy.register(
+      ProxyTrack(
+        length: payload.length,
+        mimeType: 'audio/mp4',
+        mint: () async => stale,
+        refreshMint: () async {
+          refreshes++;
+          return host.mint();
+        },
+      ),
+    );
+    final (status, _, body) = await fetch(url, range: 'bytes=0-');
+    expect(status, HttpStatus.partialContent);
+    expect(body, payload);
+    expect(refreshes, greaterThan(0));
+  });
+
   test('serves a seek without reading from the start', () async {
     final url = await register(proxy);
     final (status, _, body) = await fetch(url, range: 'bytes=2000000-2499999');

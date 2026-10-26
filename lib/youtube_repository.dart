@@ -3,8 +3,10 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
+import 'audio_downloader.dart';
 import 'models.dart';
 import 'stream_proxy.dart';
+import 'web_embedded.dart';
 
 class VideoDetails {
   final VideoItem video;
@@ -12,10 +14,41 @@ class VideoDetails {
   const VideoDetails(this.video, this.tracks);
 }
 
+/// Metadata and location of one completed offline audio download.
+class DownloadedAudio {
+  const DownloadedAudio({
+    required this.file,
+    required this.trackId,
+    required this.label,
+    required this.isDefault,
+    required this.container,
+    required this.mimeType,
+    required this.bytes,
+    required this.bitrate,
+  });
+
+  final File file;
+  final String trackId;
+  final String label;
+  final bool isDefault;
+  final String container;
+  final String mimeType;
+  final int bytes;
+  final int bitrate;
+}
+
 class YoutubeRepository {
-  YoutubeRepository({this.cacheDirectory});
+  YoutubeRepository({this.cacheDirectory, NChallengeSolver? challengeSolver})
+    : _web = WebEmbeddedClient(challengeSolver: challengeSolver);
 
   final YoutubeExplode _yt = YoutubeExplode();
+  final WebEmbeddedClient _web;
+
+  /// Used for full-track offline downloads. Kept separate from the proxy's
+  /// client so a cancelled download never disturbs live playback.
+  final HttpClient _downloadClient = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 30)
+    ..idleTimeout = const Duration(seconds: 15);
 
   /// Where [StreamProxy] stores its segment cache. Defaults to a subdirectory
   /// of the platform temp directory; injectable for tests and tooling.
@@ -46,22 +79,47 @@ class YoutubeRepository {
   Future<StreamManifest> _manifest(String id) =>
       _yt.videos.streams.getManifest(id).timeout(const Duration(seconds: 45));
 
+  /// Direct multi-language URLs from the embedded web player.
+  ///
+  /// Returns `null` when the embedded player is unavailable or the n-signature
+  /// solver is not configured; callers then use the native client fallback.
+  Future<WebManifest?> _webManifest(String id) async {
+    if (!_web.canUnlock) return null;
+    try {
+      return await _web.manifest(id).timeout(const Duration(seconds: 90));
+    } catch (_) {
+      return null;
+    }
+  }
+
   List<AudioOnlyStreamInfo> _audio(StreamManifest m) =>
       m.audioOnly.where((s) => s.fragments.isEmpty).toList();
-  String _key(AudioOnlyStreamInfo s) => s.audioTrack?.id ?? 'und';
+  String _key(AudioOnlyStreamInfo s) =>
+      (s.audioTrack?.id ?? 'und').split('.').first;
 
   Future<VideoDetails> inspect(String id, {bool mp4Only = false}) async {
     final v = await video(id);
-    final manifest = await _manifest(id);
+    final web = await _webManifest(id);
     final choices = <String, AudioChoice>{};
-    for (final s in _audio(manifest)) {
-      if (mp4Only && s.container.name != 'mp4') continue;
-      final t = s.audioTrack;
-      choices[_key(s)] = AudioChoice(
-        _key(s),
-        t?.displayName ?? 'Język nieoznaczony',
-        t?.audioIsDefault ?? false,
-      );
+    if (web != null) {
+      for (final s in web.audio) {
+        if (mp4Only && s.container != 'mp4') continue;
+        choices.putIfAbsent(
+          s.trackId,
+          () => AudioChoice(s.trackId, s.trackName, s.isDefault),
+        );
+      }
+    } else {
+      final manifest = await _manifest(id);
+      for (final s in _audio(manifest)) {
+        if (mp4Only && s.container.name != 'mp4') continue;
+        final t = s.audioTrack;
+        choices[_key(s)] = AudioChoice(
+          _key(s),
+          t?.displayName ?? 'Język nieoznaczony',
+          t?.audioIsDefault ?? false,
+        );
+      }
     }
     final tracks = choices.values.toList()
       ..sort((a, b) => a.name.compareTo(b.name));
@@ -103,6 +161,10 @@ class YoutubeRepository {
     bool mp4Only = false,
   }) async {
     if (a == b) throw StateError('Wybierz dwa różne języki.');
+    final web = await _webManifest(id);
+    if (web != null) {
+      return _streamsWeb(id, web, a, b, video: video, mp4Only: mp4Only);
+    }
     // Fresh, independent manifests: Android client URLs can be single-session-bound.
     final streamA = _select(await _manifest(id), a, mp4Only: mp4Only);
     final streamB = _select(await _manifest(id), b, mp4Only: mp4Only);
@@ -166,6 +228,237 @@ class YoutubeRepository {
     return {'urlA': urlA, 'urlB': urlB, 'videoUrl': videoUrl};
   }
 
+  Future<Map<String, dynamic>> _streamsWeb(
+    String id,
+    WebManifest manifest,
+    String a,
+    String b, {
+    required bool video,
+    required bool mp4Only,
+  }) async {
+    final streamA = manifest.selectAudio(a, mp4Only: mp4Only);
+    final streamB = manifest.selectAudio(b, mp4Only: mp4Only);
+    final chosenVideo = video ? manifest.selectVideo() : null;
+    if (video && chosenVideo == null) {
+      throw StateError(
+        'Brak zgodnego strumienia obrazu. Wyłącz obraz i uruchom samo audio.',
+      );
+    }
+    final proxy = await _ensureProxy();
+    if (proxy == null) {
+      return {
+        'urlA': streamA.url.toString(),
+        'urlB': streamB.url.toString(),
+        'videoUrl': chosenVideo?.url.toString(),
+      };
+    }
+    await proxy.release();
+    final urlA = await proxy.register(
+      ProxyTrack(
+        length: streamA.bytes,
+        mimeType: streamA.mimeType,
+        mint: () => _freshWebAudio(id, a, streamA.tag, mp4Only: mp4Only),
+        refreshMint: () =>
+            _freshWebAudio(id, a, streamA.tag, mp4Only: mp4Only, refresh: true),
+      ),
+    );
+    final urlB = await proxy.register(
+      ProxyTrack(
+        length: streamB.bytes,
+        mimeType: streamB.mimeType,
+        mint: () => _freshWebAudio(id, b, streamB.tag, mp4Only: mp4Only),
+        refreshMint: () =>
+            _freshWebAudio(id, b, streamB.tag, mp4Only: mp4Only, refresh: true),
+      ),
+    );
+    String? videoUrl;
+    if (chosenVideo != null) {
+      videoUrl = await proxy.register(
+        ProxyTrack(
+          length: chosenVideo.bytes,
+          mimeType: chosenVideo.mimeType,
+          mint: () => _freshWebVideo(id, chosenVideo.tag),
+          refreshMint: () => _freshWebVideo(id, chosenVideo.tag, refresh: true),
+        ),
+      );
+    }
+    return {'urlA': urlA, 'urlB': urlB, 'videoUrl': videoUrl};
+  }
+
+  Future<Uri?> _freshWebAudio(
+    String id,
+    String language,
+    int tag, {
+    required bool mp4Only,
+    bool refresh = false,
+  }) async {
+    try {
+      final manifest = await _web.manifest(id, refresh: refresh);
+      for (final s in manifest.audio) {
+        if (s.trackId == language && s.tag == tag) return s.url;
+      }
+      return manifest.selectAudio(language, mp4Only: mp4Only).url;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Uri?> _freshWebVideo(
+    String id,
+    int tag, {
+    bool refresh = false,
+  }) async {
+    try {
+      final manifest = await _web.manifest(id, refresh: refresh);
+      for (final s in manifest.video) {
+        if (s.tag == tag) return s.url;
+      }
+      return manifest.selectVideo()?.url;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  ///
+  /// Prefers an MP4/AAC variant because it is natively decodable by AVFoundation
+  /// and ExoPlayer. The bitrate closest to 128 kbps is chosen when YouTube
+  /// offers several variants. The returned [DownloadedAudio.file] is already
+  /// complete; a `.part` file may remain after cancellation and is resumed by
+  /// the next call.
+  Future<DownloadedAudio> downloadAudio({
+    required String videoId,
+    required String trackId,
+    required Directory directory,
+    required bool mp4Only,
+    void Function(int received, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final web = await _webManifest(videoId);
+    if (web != null) {
+      return _downloadWeb(
+        id: videoId,
+        manifest: web,
+        trackId: trackId,
+        directory: directory,
+        mp4Only: mp4Only,
+        onProgress: onProgress,
+        isCancelled: isCancelled,
+      );
+    }
+    final manifest = await _manifest(videoId);
+    final stream = _selectForDownload(manifest, trackId, mp4Only: mp4Only);
+    final extension = extensionFor(stream.container);
+    final file = File('${directory.path}/${_fileSafe(trackId)}.$extension');
+    final downloader = AudioDownloader(client: _downloadClient);
+    await downloader.download(
+      spec: AudioDownloadSpec(
+        initialUrl: stream.url,
+        totalBytes: stream.size.totalBytes,
+      ),
+      destination: file,
+      mint: () => _freshUrl(videoId, trackId, stream.tag, mp4Only: mp4Only),
+      onProgress: onProgress,
+      isCancelled: isCancelled,
+    );
+    return DownloadedAudio(
+      file: file,
+      trackId: trackId,
+      label: stream.audioTrack?.displayName ?? trackId,
+      isDefault: stream.audioTrack?.audioIsDefault ?? false,
+      container: stream.container.name,
+      mimeType: _mimeType(stream.container, video: false),
+      bytes: await file.length(),
+      bitrate: stream.bitrate.bitsPerSecond,
+    );
+  }
+
+  Future<DownloadedAudio> _downloadWeb({
+    required String id,
+    required WebManifest manifest,
+    required String trackId,
+    required Directory directory,
+    required bool mp4Only,
+    void Function(int received, int total)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final stream = manifest.selectAudio(trackId, mp4Only: mp4Only);
+    final extension = _extensionForName(stream.container);
+    final file = File('${directory.path}/${_fileSafe(trackId)}.$extension');
+    final downloader = AudioDownloader(client: _downloadClient);
+    await downloader.download(
+      spec: AudioDownloadSpec(initialUrl: stream.url, totalBytes: stream.bytes),
+      destination: file,
+      mint: () => _freshWebAudio(id, trackId, stream.tag, mp4Only: mp4Only),
+      refreshMint: () => _freshWebAudio(
+        id,
+        trackId,
+        stream.tag,
+        mp4Only: mp4Only,
+        refresh: true,
+      ),
+      onProgress: onProgress,
+      isCancelled: isCancelled,
+    );
+    return DownloadedAudio(
+      file: file,
+      trackId: trackId,
+      label: stream.trackName,
+      isDefault: stream.isDefault,
+      container: stream.container,
+      mimeType: stream.mimeType,
+      bytes: await file.length(),
+      bitrate: stream.bitrate,
+    );
+  }
+
+  /// Chooses the variant closest to 128 kbps, preferring MP4 when available.
+  AudioOnlyStreamInfo _selectForDownload(
+    StreamManifest manifest,
+    String trackId, {
+    required bool mp4Only,
+  }) {
+    final matching = _audio(manifest).where((s) => _key(s) == trackId).toList();
+    if (matching.isEmpty) {
+      throw StateError(
+        'Wybrana ścieżka nie jest już dostępna. Odśwież listę języków.',
+      );
+    }
+    final mp4 = matching.where((s) => s.container.name == 'mp4').toList();
+    if (mp4.isEmpty && mp4Only) {
+      throw StateError(
+        'Ta ścieżka nie ma strumienia MP4 obsługiwanego przez iOS/macOS. '
+        'Wybierz inny język lub film.',
+      );
+    }
+    final candidates = mp4.isNotEmpty ? mp4 : matching;
+    candidates.sort((a, b) {
+      final distanceA = (a.bitrate.bitsPerSecond - 128000).abs();
+      final distanceB = (b.bitrate.bitsPerSecond - 128000).abs();
+      if (distanceA != distanceB) return distanceA.compareTo(distanceB);
+      return b.bitrate.bitsPerSecond.compareTo(a.bitrate.bitsPerSecond);
+    });
+    return candidates.first;
+  }
+
+  /// File extension matching the YouTube container.
+  static String extensionFor(StreamContainer container) =>
+      switch (container.name) {
+        'mp4' => 'm4a',
+        'webm' => 'webm',
+        '3gpp' => '3gp',
+        _ => 'bin',
+      };
+
+  static String _fileSafe(String value) =>
+      value.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+
+  static String _extensionForName(String container) => switch (container) {
+    'mp4' => 'm4a',
+    'webm' => 'webm',
+    '3gpp' => '3gp',
+    _ => 'bin',
+  };
+
   static String _mimeType(StreamContainer container, {required bool video}) =>
       switch (container.name) {
         'mp4' => video ? 'video/mp4' : 'audio/mp4',
@@ -196,17 +489,12 @@ class YoutubeRepository {
 
   /// A manifest used only for minting media URLs.
   ///
-  /// Skips the watch page when possible: the proxy needs a new URL roughly
-  /// every megabyte, so this is the hot path and must stay cheap.
+  /// Uses the watch page: `getManifest(requireWatchPage: false)` currently
+  /// returns signed URLs that answer HTTP 403 even for the first byte. The
+  /// watch page costs more per segment, but its URLs actually serve ranges.
   Future<StreamManifest> _mintManifest(String id) async {
     mintedManifests++;
-    try {
-      return await _yt.videos.streams
-          .getManifest(id, requireWatchPage: false)
-          .timeout(const Duration(seconds: 30));
-    } catch (_) {
-      return _manifest(id);
-    }
+    return _manifest(id);
   }
 
   /// Mints a fresh URL for one language track.
@@ -282,6 +570,8 @@ class YoutubeRepository {
   void close() {
     _proxy?.close();
     _proxy = null;
+    _web.close();
+    _downloadClient.close(force: true);
     _yt.close();
   }
 }

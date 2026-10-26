@@ -16,6 +16,7 @@ class ProxyTrack {
     required this.length,
     required this.mimeType,
     required this.mint,
+    this.refreshMint,
   });
 
   /// Total size of the remote stream in bytes.
@@ -24,8 +25,12 @@ class ProxyTrack {
   /// MIME type reported to the player, e.g. `audio/mp4`.
   final String mimeType;
 
-  /// Mints a fresh upstream URL for this track.
+  /// Mints an upstream URL for this track, usually from a cached manifest.
   final StreamUrlMinter mint;
+
+  /// Mints a genuinely fresh URL after [mint] produced a rejected one. When
+  /// omitted, [mint] is retried.
+  final StreamUrlMinter? refreshMint;
 }
 
 /// Local HTTP server that makes YouTube media URLs playable by AVFoundation and
@@ -335,7 +340,12 @@ class _Track {
     for (var attempt = 1; attempt <= attempts; attempt++) {
       if (_closed) throw StateError('Zamknięto pamięć podręczną strumienia.');
       try {
-        final url = await spec.mint();
+        // The first attempt may reuse a cached manifest. Later attempts ask for
+        // a fresh manifest so an expired URL cannot be handed out repeatedly.
+        final minter = attempt == 1
+            ? spec.mint
+            : (spec.refreshMint ?? spec.mint);
+        final url = await minter();
         if (url == null) throw StateError('Brak adresu strumienia.');
         var bytes = await _safeFetch(url, start, wanted, useQueryRange: false);
         // `ios` URLs reject the header form outright; retry with `range=`.
