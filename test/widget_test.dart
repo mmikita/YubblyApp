@@ -139,4 +139,28 @@ void main() {
       null,
     );
   });
+  testWidgets('stream failure offers a refresh action', (tester) async {
+    final state = AppState();
+    await tester.runAsync(state.init);
+    state
+      ..current = const VideoItem(
+        id: 'zA-UHB2WcT4',
+        title: 'Dwa języki. Jedna rozmowa.',
+      )
+      ..tracks = const [
+        AudioChoice('pl.4', 'Polski', false),
+        AudioChoice('en.4', 'English (original)', true),
+      ]
+      ..trackA = 'pl.4'
+      ..trackB = 'en.4'
+      ..error =
+          'Nie udało się odtworzyć strumienia (HTTP 403 – YouTube odrzucił '
+          'lub ograniczył strumień).';
+    await tester.pumpWidget(YubblyApp(initialState: state));
+    await tester.pump();
+    expect(find.text('Odśwież'), findsOneWidget);
+    expect(find.textContaining('HTTP 403'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

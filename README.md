@@ -1,6 +1,6 @@
 # YubblyApp
 
-Aplikacja Flutter na **Androida 8.0+** do słuchania dwóch ścieżek językowych jednego filmu YouTube. Bez osobnego serwera i bez pobierania całego filmu na dysk przed odtwarzaniem.
+Aplikacja Flutter na **Androida 8.0+**, **iOS 15+** i **macOS 12+** do słuchania dwóch ścieżek językowych jednego filmu YouTube. Bez osobnego serwera i bez pobierania całego filmu na dysk przed odtwarzaniem.
 
 ## Szybki start
 
@@ -8,14 +8,14 @@ Aplikacja Flutter na **Androida 8.0+** do słuchania dwóch ścieżek językowyc
 2. Poczekaj na sprawdzenie rzeczywiście dostępnych ścieżek audio. Wybierz język A i B.
 3. Wybierz sposób słuchania, załóż słuchawki i naciśnij Odtwórz.
 4. Prędkość 1–5×, głośność i ustawienia miksu zmieniają się na żywo. Aby zmienić języki lub włączyć obraz, najpierw wstrzymaj odtwarzanie.
-5. Po zminimalizowaniu używaj powiadomienia/ekranu blokady. Przycisk Stop zatrzymuje także odtwarzanie w tle.
+5. Na Androidzie po zminimalizowaniu używaj powiadomienia/ekranu blokady. Na iOS i macOS dźwięk działa w tle (iOS ma kategorię `playback`), ale ekran blokady iOS nie ma jeszcze własnych przycisków sterowania. Przycisk Stop zatrzymuje odtwarzanie w tle.
 6. **Udostępnij** tworzy obraz QR z podpisem YubblyApp albo link ustawień. Znajomy skanuje go w aplikacji.
 
 Film bez co najmniej dwóch wykrytych ścieżek nie jest przedstawiany jako gotowy do dwujęzycznego odtwarzania. Napisy nie są zamiennikiem dubbingu. Oryginał oznaczamy tylko wtedy, gdy określa go nazwa ścieżki zwrócona przez YouTube; domyślna ścieżka może być dubbingiem.
 
 ## Funkcje
 
-- Dwa niezależne strumienie audio i opcjonalny obraz do 720p.
+- Dwa niezależne strumienie audio i opcjonalny obraz do 720p (obraz tylko na Androidzie; iOS i macOS odtwarzają samo audio).
 - Stały podział A/lewo i B/prawo, sinusoidalna zamiana stron, naprzemienny miks mono oraz oba języki jednocześnie.
 - Długość cyklu 2–300 s, krzywa equal-power/liniowa, kontrast, faza, mikromodulacja, zamiana uszu i korekta czasu ±3 s.
 - Sterowanie z powiadomienia, obsługa utraty audio focus, odłączenia słuchawek, buforowania i wspólnego przewijania.
@@ -26,7 +26,7 @@ Film bez co najmniej dwóch wykrytych ścieżek nie jest przedstawiany jako goto
 
 ## Budowanie
 
-Wymagane: Flutter **3.35.7 / Dart 3.9.2**, JDK 17, Android SDK z platformą 36 i narzędziami wskazanymi przez Flutter. Na Windowsie najłatwiej zainstalować Android Studio i Flutter SDK, dodać Flutter do PATH, a następnie:
+Wymagane: Flutter **3.47.1 / Dart 3.13.1**, JDK 17, Android SDK z platformą 36 i narzędziami wskazanymi przez Flutter. Na Windowsie najłatwiej zainstalować Android Studio i Flutter SDK, dodać Flutter do PATH, a następnie:
 
 ```sh
 flutter doctor
@@ -46,24 +46,39 @@ Wynik: `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`. Pozostałe arc
 
 Ta wersja testowa nie minifikuje kodu Androida: zachowuje metadane zależności Kotlin/ML Kit. Konfiguracja podpisuje kompilację release **kluczem deweloperskim debug**. Do publikacji i trwałych aktualizacji trzeba skonfigurować własny keystore. Projekt zawiera [workflow GitHub Actions](https://github.com/mmikita/YubblyApp/actions) uruchamiany ręcznie lub przy push/PR do main. Po pomyślnym wykonaniu APK są dostępne w artefakcie `YubblyApp-Android` danego uruchomienia.
 
-### macOS (podgląd interfejsu)
+### iOS i macOS
 
-Projekt zawiera target macOS do kompilacji i uruchamiania interfejsu na komputerze:
+Oba targety Apple korzystają ze wspólnego silnika AVFoundation w `apple/YubblyPlaybackEngine.swift`. Wymagają Xcode 16+ (sprawdzane z Xcode 26.5) i Fluttera 3.47.1:
 
 ```sh
 flutter pub get
 flutter run -d macos
+# lub, po uruchomieniu symulatora:
+flutter run -d "iPhone 17 Pro"
+flutter build ios --simulator --debug
 ```
 
-Silnik odtwarzania nadal istnieje wyłącznie dla Androida. Na macOS działają katalog, sprawdzanie dostępnych ścieżek, QR, udostępnianie i ekran historii (wpisy powstają w trakcie odtwarzania, więc na macOS pozostaje pusty), a naciśnięcie Odtwórz pokazuje komunikat o braku adaptera audio zamiast błędu kanału platformy. Okno ma minimalny rozmiar 360×640, a skaner QR wymaga zgody na dostęp do kamery.
+iOS wymaga MP4/AAC dla obu ścieżek — AVFoundation nie odtwarza strumieni WebM/Opus z YouTube. Lista języków jest filtrowana do ścieżek z MP4, a przy braku takiego strumienia aplikacja pokazuje czytelny błąd. Obraz wideo jest dostępny tylko na Androidzie.
 
-Renderowanie na macOS korzysta ze Skii (Metal), nie z Impellera: w `macos/Runner/Info.plist` jest ustawione `FLTEnableImpeller` = `false` dla wszystkich konfiguracji (Debug, Profile, Release). Impeller na macOS powodował artefakty graficzne przy przełączaniu widoków. Nie zmienia to Androida ani iOS.
+Renderowanie na macOS i iOS korzysta ze Skii (Metal), nie z Impellera: w `macos/Runner/Info.plist` i `ios/Runner/Info.plist` jest ustawione `FLTEnableImpeller` = `false` dla wszystkich konfiguracji (Debug, Profile, Release). Impeller powodował artefakty graficzne przy przełączaniu widoków. Nie zmienia to Androida.
 
-Znane ograniczenia targetu macOS:
+Silnik Apple:
 
-- **Brak odtwarzania dźwięku.** Silnik Media3 istnieje tylko na Androidzie. Kanał `app.yubbly/player` odpowiada na `load` i `play` błędem `PlatformException(UNSUPPORTED_PLATFORM)` z komunikatem „Odtwarzanie audio na macOS nie jest jeszcze zaimplementowane…”, a interfejs pokazuje informację o braku adaptera audio zamiast uruchamiać odtwarzanie.
-- Historia odtwarzania pozostaje pusta, ponieważ wpisy powstają wyłącznie w trakcie rzeczywistego odtwarzania.
-- Katalog, sprawdzanie dostępnych ścieżek, udostępnianie, skaner QR i ustawienia miksu działają normalnie.
+- Trzyma dwa niezależne `AVPlayer` — A i B — i miksuje ich wyjścia w systemowym mikserze.
+- Do każdej ścieżki podłącza `MTAudioProcessingTap`, który sprowadza dźwięk do mono i rozprowadza go do lewej/prawej według tej samej macierzy i wygładzania 10 ms co Android.
+- Synchronizuje pozycje przez `preroll` obu graczy przed startem i po przewinięciu, korektę tempa B do ±2,5% oraz twardą korektę przez wspólne przewinięcie, gdy dryf przekracza 150 ms.
+- Zapisuje sesję, pozycję i historię w `UserDefaults`, niezależnie od `shared_preferences` interfejsu.
+- Na iOS ustawia `AVAudioSession` w kategorii `playback`, obsługuje przerwania i odłączenie słuchawek oraz dodaje `UIBackgroundModes: audio`.
+
+Znane ograniczenia targetów Apple:
+
+- **Tylko audio.** Obraz jest dostępny wyłącznie na Androidzie; przełącznik „Odtwarzaj również obraz” jest na macOS/iOS wyłączony, a ekran pokazuje miniaturę.
+- **Tylko MP4/AAC.** AVFoundation nie odtwarza WebM/Opus. Jeśli wybrana ścieżka nie ma wariantu MP4, odtwarzanie kończy się komunikatem zamiast cichego błędu.
+- **Brak przycisków na ekranie blokady iOS.** Dźwięk gra w tle dzięki `UIBackgroundModes: audio` i kategorii `playback`, ale `MPNowPlayingInfoCenter`/`MPRemoteCommandCenter` nie są jeszcze podłączone.
+- **Brak rejestracji schematu `yubbly://` na iOS.** Kody QR działają przez skaner w aplikacji; otwieranie linków z innych aplikacji nie jest jeszcze podłączone.
+- **AirPlay.** `MTAudioProcessingTap` nie jest stosowany w strumieniu AirPlay, więc routing lewo/prawo może być wtedy nieaktywny.
+- **Czas trwania.** Część strumieni YouTube ma w kontenerze MP4 dwukrotnie dłuższy czas niż materiał i końcową ciszę. Silnik używa czasu trwania filmu z YouTube do osi czasu, przewijania i wykrycia końca.
+- Historia, katalog, sprawdzanie ścieżek, udostępnianie, skaner QR i ustawienia miksu działają normalnie. Historia zapisuje się w `UserDefaults` podczas rzeczywistego odtwarzania.
 
 ## Testy
 
@@ -75,17 +90,17 @@ bash tool/test_native.sh
 dart run tool/probe_youtube.dart zA-UHB2WcT4
 ```
 
-`test_native.sh` wymaga `javac` i `java`; na Windowsie można użyć Git Bash. Testy obejmują walidację linków i QR, przywracanie stanu/interfejs na małym ekranie, obsługę sterowania oraz matematykę routingu/bezpiecznych poziomów sygnału. Test sieciowy próbuje jednocześnie odczytać początkowy fragment angielskiej i polskiej ścieżki.
+`test_native.sh` uruchamia test Javy, jeśli dostępne są `javac` i `java` (na Windowsie można użyć Git Bash), a na macOS dodatkowo kompiluje test matematyki miksera Apple, jeśli dostępny jest `swiftc`. Testy obejmują walidację linków i QR, przywracanie stanu/interfejs na małym ekranie, obsługę sterowania oraz matematykę routingu/bezpiecznych poziomów sygnału. Test sieciowy próbuje jednocześnie odczytać początkowy fragment angielskiej i polskiej ścieżki.
 
 Szczegółowy wynik walidacji tej paczki: [docs/VALIDATION.md](docs/VALIDATION.md). Kontrola na telefonie: [docs/DEVICE_CHECKLIST.md](docs/DEVICE_CHECKLIST.md).
 
 ## Granice tej wersji
 
-- Platforma odtwarzania: Android. Target macOS uruchamia interfejs i funkcje sieciowe, lecz nie ma adaptera audio. Adaptery iOS/Windows/Web oraz opcjonalny eksport gotowego MP3 do odsłuchu offline nie są zaimplementowane.
-- YouTube jest odczytywany przez nieoficjalny ekstraktor `youtube_explode_dart` 3.1.0. Zmiany YouTube, blokady regionalne, ograniczenia wieku lub wygasłe adresy mogą wymagać ponownego pobrania strumieni/aktualizacji biblioteki.
-- Dwie ścieżki mają wspólną pozycję czasową z korektą dryfu, lecz nie są jednym mikserem próbek ze wspólnym zegarem sprzętowym. Jakość synchronizacji, Bluetooth, 5× i długie odtwarzanie z wygaszonym ekranem należy potwierdzić na urządzeniu.
+- Platforma odtwarzania: Android (Media3) oraz iOS/macOS (AVFoundation, audio). Adaptery Windows/Web oraz opcjonalny eksport gotowego MP3 do odsłuchu offline nie są zaimplementowane.
+- YouTube jest odczytywany przez nieoficjalny ekstraktor `youtube_explode_dart` 3.1.0. Zmiany YouTube, blokady regionalne, ograniczenia wieku lub wygasłe adresy mogą wymagać ponownego pobrania strumieni/aktualizacji biblioteki. W sprawdzanym środowisku YouTube zwracał 403 dla dalszych zakresów bajtów części strumieni z dubami; dotyczy to również odtwarzania Android/Media3 i nie jest błędem silnika AVFoundation. Ponowienie po odświeżeniu adresów może pomóc, ale pełna naprawa wymaga aktualizacji ekstraktora.
+- Dwie ścieżki mają wspólną pozycję czasową z korektą dryfu, lecz nie są jednym mikserem próbek ze wspólnym zegarem sprzętowym. Jakość synchronizacji, Bluetooth, AirPlay, 5× i długie odtwarzanie z wygaszonym ekranem należy potwierdzić na urządzeniu.
 - Aplikacja nie blokuje reklam w innych aplikacjach ani w przeglądarce. Pobiera strumienie samego materiału; nie wycina fragmentów sponsorskich zapisanych w treści.
-- Wymuszone zatrzymanie aplikacji przez Androida kończy odtwarzanie. Po restarcie odtwarzanie jest wznawiane ręcznie, z ponownie rozwiązanymi adresami.
+- Wymuszone zatrzymanie aplikacji przez system kończy odtwarzanie. Po restarcie odtwarzanie jest wznawiane ręcznie, z ponownie rozwiązanymi adresami.
 
 ## Źródła i konstrukcja
 

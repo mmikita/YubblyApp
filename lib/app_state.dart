@@ -11,6 +11,25 @@ class AppState extends ChangeNotifier {
   final YoutubeRepository youtube;
   AppState({YoutubeRepository? youtube})
     : youtube = youtube ?? YoutubeRepository();
+
+  /// Android, iOS and macOS all expose the `app.yubbly/player` channel.
+  static bool get nativePlaybackSupported =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
+  /// Only Android embeds a video platform view. Apple targets play audio.
+  static bool get videoSurfaceSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  /// AVFoundation cannot decode YouTube's WebM/Opus streams.
+  static bool get requiresMp4Audio =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
+  bool get hasVideoSurface => videoSurfaceSupported;
   SharedPreferences? _prefs;
   Timer? _poll;
   bool _polling = false,
@@ -62,7 +81,7 @@ class AppState extends ChangeNotifier {
         await openInput(call.arguments as String);
       }
     });
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    if (nativePlaybackSupported) {
       try {
         final snapshot = await native.invokeMapMethod<String, dynamic>('state');
         if (snapshot != null) _applyState(snapshot, restore: true);
@@ -103,7 +122,7 @@ class AppState extends ChangeNotifier {
       current = VideoItem.fromJson(Map<String, dynamic>.from(j['video']));
       trackA = j['trackA'] as String?;
       trackB = j['trackB'] as String?;
-      withVideo = j['withVideo'] == true;
+      withVideo = j['withVideo'] == true && hasVideoSurface;
       mix = MixSettings.fromJson(Map<String, dynamic>.from(j['mix'] ?? {}));
       tracks = [
         if (trackA != null)
@@ -196,7 +215,7 @@ class AppState extends ChangeNotifier {
   Future<void> inspect(VideoItem v) => run(() => _inspect(v.id));
 
   Future<void> _inspect(String id) async {
-    final result = await youtube.inspect(id);
+    final result = await youtube.inspect(id, mp4Only: requiresMp4Audio);
     await native.invokeMethod('stop');
     _loadedPair = '';
     playing = false;
@@ -230,8 +249,10 @@ class AppState extends ChangeNotifier {
     }
     await _saveCatalog();
     if (tracks.length < 2) {
-      error =
-          'Ten film udostępnia mniej niż dwie ścieżki audio. Wybierz inny film. Napisy nie są dubbingiem.';
+      error = requiresMp4Audio
+          ? 'Ten film udostępnia mniej niż dwie ścieżki audio w formacie MP4. '
+                'AVFoundation na iOS/macOS nie odtwarza WebM/Opus. Wybierz inny film.'
+          : 'Ten film udostępnia mniej niż dwie ścieżki audio. Wybierz inny film. Napisy nie są dubbingiem.';
     }
   }
 
@@ -241,8 +262,9 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> togglePlayback() async {
-    if (playing || buffering) {
+  Future<void> togglePlayback({bool refreshStreams = false}) async {
+    if (busy) return;
+    if ((playing || buffering) && !refreshStreams) {
       await native.invokeMethod('pause');
       playing = false;
       buffering = false;
@@ -250,8 +272,10 @@ class AppState extends ChangeNotifier {
       return;
     }
     if (!canPlay) return;
+    if (refreshStreams) _loadedPair = '';
     await run(() async {
-      if (_loadedPair == pair) {
+      if (refreshStreams) await native.invokeMethod('stop');
+      if (!refreshStreams && _loadedPair == pair) {
         await native.invokeMethod('play');
         return;
       }
@@ -259,7 +283,8 @@ class AppState extends ChangeNotifier {
         current!.id,
         trackA!,
         trackB!,
-        video: withVideo,
+        video: withVideo && hasVideoSurface,
+        mp4Only: requiresMp4Audio,
       );
       final session = {
         'video': current!.toJson(),
@@ -304,6 +329,7 @@ class AppState extends ChangeNotifier {
   }
 
   void setVideo(bool value) {
+    if (value && !hasVideoSurface) return;
     withVideo = value;
     notifyListeners();
   }

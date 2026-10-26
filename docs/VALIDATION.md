@@ -37,3 +37,32 @@ Wersja testowa ma wyłączoną minifikację/shrinking Androida. Pierwsza kompila
 - Sprawdzono manifest wynikowego APK, w tym własną obsługę linków QR.
 - Instalator: `YubblyApp-0.1.0-arm64.apk` (34046199 bajtów).
 - SHA-256: `ca0eadf9bc1ddde1d9ecdb9eb90c02b9db8f07c5ee0de2d4627af85504db5086`.
+
+
+## Apple audio adapter (26.10.2026)
+
+Środowisko Apple: Flutter 3.47.1, Dart 3.13.1, Xcode 26.5, macOS 26.7.1, symulator iPhone 16 Pro (iOS 18.3).
+
+| Sprawdzenie | Wynik | Zakres |
+|---|---|---|
+| `flutter analyze` | PASS — 0 problemów | Dart po dodaniu Apple i filtra MP4 |
+| `flutter test` | PASS — 10 testów | W tym nowy test akcji **Odśwież** przy błędzie strumienia |
+| `AppleMixerMathTest.swift` | PASS — 528 009 asercji | Routing, zamiana uszu, mono, granice, korekta prędkości, przesunięcie B |
+| `flutter build macos --debug` | PASS | Wspólny silnik AVFoundation + kanał macOS |
+| `flutter build ios --debug --no-codesign` | PASS | Target iOS, AppDelegate, kanał i tap |
+| `flutter build ios --simulator --debug` | PASS | iPhone 16 Pro (iOS 18.3); aplikacja instaluje się i uruchamia ekran startowy |
+| Próba silnika na macOS | PASS | Dwa zdalne strumienie `googlevideo.com` (AAC), `MTAudioProcessingTap` aktywny, stabilny dryf ≈ −21 ms, pozycja i historia zapisywane |
+| Koniec materiału | PASS | Pozycja zatrzymana na metadanych YouTube ≈ 19 s mimo 38 s w kontenerze MP4 i ciszy po 19 s |
+| Odsłuch na sprzęcie Apple | NIEWYKONANY | Brak testu słuchowego; RMS z tapu potwierdził przetwarzane ramki, ale nie zastępuje odsłuchu |
+| iOS w tle / ekran blokady | CZĘŚCIOWO | `UIBackgroundModes: audio` i kategoria `playback`; brak `MPRemoteCommandCenter` |
+| Impeller na Apple | PASS | `FLTEnableImpeller` = `false` w `ios/Runner/Info.plist` i `macos/Runner/Info.plist`; Skia/Metal dla Debug, Profile i Release |
+| Czytelny błąd 403 | PASS | `CoreMediaErrorDomain -12660` jest rozwijany z łańcucha `NSError`; UI pokazuje HTTP 403 i przycisk **Odśwież** pobierający nowe adresy |
+| Długie filmy z dubami | OGRANICZENIE ZEWNĘTRZNE | W tym środowisku YouTube zwraca 403 dla kolejnych zakresów bajtów strumieni z wieloma dubami (limity po stronie googlevideo). Dotyczy to także Media3; krótki strumień bez dubów działał z AVFoundation |
+
+### Wnioski techniczne
+
+- `MTAudioProcessingTap` działa ze zdalnymi progresywnymi plikami MP4 z googlevideo; format dekodowania to 44,1 kHz, stereo float32 planar.
+- `AVPlayer` po `pause`/`seek` startuje audio z opóźnieniem ~0,5 s, a `seek` natychmiast po nim może zostać anulowany przez `preroll`. Silnik czeka na zakończenie obu `seek`, dodaje 200 ms osadzenia i prerolluje oba odtwarzacze.
+- Część strumieni YouTube ma błędny czas trwania w kontenerze (dwukrotność) i ciszę na końcu; osią czasu jest `durationMs` z metadanych filmu.
+- AVFoundation nie odtwarza WebM/Opus, dlatego iOS/macOS filtrują listę języków do wariantów MP4.
+- Strumienie z `gir=yes` w badanym środowisku serwują ograniczony zakres początkowy, a kolejne żądania bajtów mogą kończyć się HTTP 403. Odświeżenie adresów nie omija tego limitu po stronie googlevideo; obejście wymagałoby serwera/proxy normalizującego zakresy (poza zakresem aplikacji).

@@ -28,11 +28,12 @@ class YoutubeRepository {
       m.audioOnly.where((s) => s.fragments.isEmpty).toList();
   String _key(AudioOnlyStreamInfo s) => s.audioTrack?.id ?? 'und';
 
-  Future<VideoDetails> inspect(String id) async {
+  Future<VideoDetails> inspect(String id, {bool mp4Only = false}) async {
     final v = await video(id);
     final manifest = await _manifest(id);
     final choices = <String, AudioChoice>{};
     for (final s in _audio(manifest)) {
+      if (mp4Only && s.container.name != 'mp4') continue;
       final t = s.audioTrack;
       choices[_key(s)] = AudioChoice(
         _key(s),
@@ -45,7 +46,11 @@ class YoutubeRepository {
     return VideoDetails(v, tracks);
   }
 
-  AudioOnlyStreamInfo _select(StreamManifest m, String id) {
+  AudioOnlyStreamInfo _select(
+    StreamManifest m,
+    String id, {
+    required bool mp4Only,
+  }) {
     final options = _audio(m).where((s) => _key(s) == id).toList()
       ..sort(
         (a, b) => b.bitrate.bitsPerSecond.compareTo(a.bitrate.bitsPerSecond),
@@ -55,9 +60,17 @@ class YoutubeRepository {
         'Wybrana ścieżka nie jest już dostępna. Odśwież listę języków.',
       );
     }
-    // Prefer an ordinary MP4 audio stream, natively decodable on all supported Android versions.
-    return options.where((s) => s.container.name == 'mp4').firstOrNull ??
-        options.first;
+    // Prefer an ordinary MP4 audio stream: natively decodable on Android and
+    // the only container AVFoundation can play reliably on iOS/macOS.
+    final mp4 = options.where((s) => s.container.name == 'mp4').firstOrNull;
+    if (mp4 != null) return mp4;
+    if (mp4Only) {
+      throw StateError(
+        'Ta ścieżka nie ma strumienia MP4 obsługiwanego przez iOS/macOS. '
+        'Wybierz inny język lub film.',
+      );
+    }
+    return options.first;
   }
 
   Future<Map<String, dynamic>> streams(
@@ -65,6 +78,7 @@ class YoutubeRepository {
     String a,
     String b, {
     required bool video,
+    bool mp4Only = false,
   }) async {
     if (a == b) throw StateError('Wybierz dwa różne języki.');
     // Fresh, independent manifests: Android client URLs can be single-session-bound.
@@ -94,8 +108,8 @@ class YoutubeRepository {
       }
     }
     return {
-      'urlA': _select(ma, a).url.toString(),
-      'urlB': _select(mb, b).url.toString(),
+      'urlA': _select(ma, a, mp4Only: mp4Only).url.toString(),
+      'urlB': _select(mb, b, mp4Only: mp4Only).url.toString(),
       'videoUrl': videoUrl,
     };
   }

@@ -250,6 +250,17 @@ class _HomeState extends State<Home> {
                             style: const TextStyle(fontSize: 12),
                           ),
                         ),
+                        if (state.canPlay)
+                          TextButton(
+                            onPressed: state.busy
+                                ? null
+                                : () => act(
+                                    () => state.togglePlayback(
+                                      refreshStreams: true,
+                                    ),
+                                  ),
+                            child: const Text('Odśwież'),
+                          ),
                         IconButton(
                           tooltip: 'Zamknij komunikat',
                           onPressed: () => setState(() => state.error = null),
@@ -684,11 +695,17 @@ class _HomeState extends State<Home> {
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('Odtwarzaj również obraz'),
-                    subtitle: const Text(
-                      'Zmiana wymaga pauzy i ponownego uruchomienia.',
+                    subtitle: Text(
+                      state.hasVideoSurface
+                          ? 'Zmiana wymaga pauzy i ponownego uruchomienia.'
+                          : 'Obraz jest dostępny tylko na Androidzie. '
+                                'Na macOS i iOS odtwarzane jest samo audio.',
                     ),
-                    value: state.withVideo,
-                    onChanged: state.playing || state.buffering
+                    value: state.hasVideoSurface && state.withVideo,
+                    onChanged:
+                        !state.hasVideoSurface ||
+                            state.playing ||
+                            state.buffering
                         ? null
                         : (x) => state.setVideo(x),
                   ),
